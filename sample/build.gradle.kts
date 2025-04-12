@@ -1,7 +1,7 @@
 plugins {
     kotlin("jvm") version "2.0.21"
-    id("io.github.rastiehaiev.suspensify-plugin")
     id("io.github.rastiehaiev.ir-dump") version "0.0.8"
+    id("io.github.rastiehaiev.coroutine-friendly")
 }
 
 repositories {
@@ -34,6 +34,6 @@ irDump {
     enabled = true
 }
 
-templatePlugin {
+coroutineFriendly {
     enabled = true
 }

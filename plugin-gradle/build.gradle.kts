@@ -25,7 +25,7 @@ gradlePlugin {
         create("kotlinCompilerPluginTemplate") {
             id = "${deployConfiguration.groupId}.${deployConfiguration.gradleArtifactId}"
             displayName = "Gradle compiler plugin"
-            implementationClass = "${deployConfiguration.groupId}.TemplatePlugin"
+            implementationClass = "${deployConfiguration.groupId}.CoroutineFriendlyGradlePlugin"
             description = deployConfiguration.gradleArtifactDescription
             tags.set(listOf("compiler", "kotlin"))
         }
