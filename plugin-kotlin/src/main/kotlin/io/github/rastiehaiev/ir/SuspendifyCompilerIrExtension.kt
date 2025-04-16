@@ -1,7 +1,7 @@
 package io.github.rastiehaiev.ir
 
-import io.github.rastiehaiev.SuspendifyKey
 import io.github.rastiehaiev.log
+import io.github.rastiehaiev.model.DeclarationKey
 import org.jetbrains.kotlin.backend.common.extensions.IrGenerationExtension
 import org.jetbrains.kotlin.backend.common.extensions.IrPluginContext
 import org.jetbrains.kotlin.backend.common.lower.DeclarationIrBuilder
@@ -85,7 +85,7 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
     )
 
     override fun visitConstructor(declaration: IrConstructor): IrStatement {
-        val pluginKey = declaration.origin.getPluginKey<SuspendifyKey.NestedStubClassConstructor>()
+        val pluginKey = declaration.origin.getPluginKey<DeclarationKey.SuspendifiedClassConstructor>()
             ?: return super.visitConstructor(declaration)
 
         declaration.body = irBuilder(declaration.symbol).irBlockBody {
@@ -93,7 +93,7 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
             +IrInstanceInitializerCallImpl(
                 startOffset = startOffset,
                 endOffset = endOffset,
-                classSymbol = pluginContext.findClassSymbol(pluginKey.nestedStubClass.classId),
+                classSymbol = pluginContext.findClassSymbol(pluginKey.suspendifiedClassId),
                 type = context.irBuiltIns.unitType,
             )
         }
@@ -101,7 +101,7 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
         val nestedStubClass = declaration.parentAsClass
 
         val coroutineDispatcherType = pluginContext.findClassSymbol(coroutineDispatcherClassId).defaultType
-        val delegateType = pluginContext.findClassSymbol(pluginKey.originalClass.classId).defaultType
+        val delegateType = pluginContext.findClassSymbol(pluginKey.originalClassId).defaultType
 
         val valueParameters = listOf(
             "delegate" to delegateType,
@@ -160,8 +160,8 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
         }
 
     override fun visitFunction(declaration: IrFunction): IrStatement {
-        when (val pluginKey = declaration.origin.getPluginKey<SuspendifyKey>()) {
-            is SuspendifyKey.NestedStubClassFunction -> {
+        when (val pluginKey = declaration.origin.getPluginKey<DeclarationKey>()) {
+            is DeclarationKey.SuspendifiedClassFunction -> {
                 declaration.body = try {
                     pluginKey.createSuspendFunctionBlockBody(declaration)
                 } catch (t: Throwable) {
@@ -171,7 +171,7 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
                 log("Parent:\n${declaration.parent.dump()}")
             }
 
-            is SuspendifyKey.OriginalClassConvertMethod -> {
+            is DeclarationKey.OriginalClassConvertMethod -> {
                 declaration.body = pluginKey.createSuspendifyInstanceBlockBody(declaration)
             }
 
@@ -180,7 +180,7 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
         return super.visitFunction(declaration)
     }
 
-    private fun SuspendifyKey.OriginalClassConvertMethod.createSuspendifyInstanceBlockBody(
+    private fun DeclarationKey.OriginalClassConvertMethod.createSuspendifyInstanceBlockBody(
         declaration: IrFunction,
     ): IrBlockBody {
         val constructorSymbol = pluginContext.findClassSymbol(nestedStubClass.classId)
@@ -204,11 +204,11 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
         }
     }
 
-    private fun SuspendifyKey.NestedStubClassFunction.createSuspendFunctionBlockBody(
+    private fun DeclarationKey.SuspendifiedClassFunction.createSuspendFunctionBlockBody(
         declaration: IrFunction,
     ): IrBlockBody? {
-        val nestedClassSymbol: IrClassSymbol = pluginContext.findClassSymbol(nestedStubClass.classId)
-        val originalClassSymbol: IrClassSymbol = pluginContext.findClassSymbol(originalClass.classId)
+        val nestedClassSymbol: IrClassSymbol = pluginContext.findClassSymbol(suspendifiedClassId)
+        val originalClassSymbol: IrClassSymbol = pluginContext.findClassSymbol(originalClassId)
         val declarationClass = declaration.parent as IrClass
 
         val withContextFunction: IrFunctionSymbol = pluginContext.referenceFunctions(withContextClassId)
@@ -334,7 +334,7 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
         }
     }
 
-    private inline fun <reified K : SuspendifyKey> IrDeclarationOrigin.getPluginKey(): K? {
+    private inline fun <reified K : DeclarationKey> IrDeclarationOrigin.getPluginKey(): K? {
         val generatedByPlugin = this as? IrDeclarationOrigin.GeneratedByPlugin ?: return null
         return generatedByPlugin.pluginKey as K
     }
