@@ -183,7 +183,7 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
     private fun DeclarationKey.OriginalClassConvertMethod.createSuspendifyInstanceBlockBody(
         declaration: IrFunction,
     ): IrBlockBody {
-        val constructorSymbol = pluginContext.findClassSymbol(nestedStubClass.classId)
+        val constructorSymbol = pluginContext.findClassSymbol(suspendifiedClassId)
             .constructors
             .firstOrNull()
             ?: error("Expected constructor")

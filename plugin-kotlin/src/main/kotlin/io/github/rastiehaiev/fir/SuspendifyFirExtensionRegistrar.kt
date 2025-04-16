@@ -38,12 +38,13 @@ import org.jetbrains.kotlin.name.SpecialNames
 
 class SuspendifyFirExtensionRegistrar : FirExtensionRegistrar() {
     override fun ExtensionRegistrarContext.configurePlugin() {
-        +::MyFirDeclarationGenerationExtension
+        +::SuspendifyDeclarationGenerationExtension
     }
 }
 
-private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDeclarationGenerationExtension(session) {
-    private val nestedClassName = Name.identifier("Suspendified")
+private class SuspendifyDeclarationGenerationExtension(
+    session: FirSession,
+) : FirDeclarationGenerationExtension(session) {
     private val nestedClassDelegateValName = Name.identifier("delegate")
     private val nestedClassDispatcherValName = Name.identifier("dispatcher")
 
@@ -65,19 +66,19 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
     override fun getNestedClassifiersNames(
         classSymbol: FirClassSymbol<*>,
         context: NestedClassGenerationContext,
-    ): Set<Name> {
-        return when (classSymbol.getDeclarationKey<DeclarationKey>()) {
-            is DeclarationKey.OriginalClass -> setOf(nestedClassName)
+    ): Set<Name> =
+        when (val declarationKey = classSymbol.getDeclarationKey<DeclarationKey>()) {
+            is DeclarationKey.OriginalClass -> setOf(declarationKey.suspendifiedClassName)
             else -> emptySet()
         }
-    }
 
     override fun generateNestedClassLikeDeclaration(
         owner: FirClassSymbol<*>,
         name: Name,
         context: NestedClassGenerationContext,
     ): FirClassLikeSymbol<*>? {
-        return if (name == nestedClassName) {
+        val declarationKey = owner.getDeclarationKey<DeclarationKey.OriginalClass>()
+        return if (declarationKey != null && name == declarationKey.suspendifiedClassName) {
             createNestedClassStub(owner, name).symbol
         } else {
             super.generateNestedClassLikeDeclaration(owner, name, context)
@@ -88,15 +89,7 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
     private fun createNestedClassStub(owner: FirClassSymbol<*>, name: Name): FirRegularClass {
         val functions = owner.fir.declarations
             .filterIsInstance<FirSimpleFunction>()
-            .map { firSimpleFunction ->
-                Function(
-                    name = firSimpleFunction.name,
-                    returnType = firSimpleFunction.returnTypeRef.coneType,
-                    parameters = firSimpleFunction.valueParameters.map { firValueParameter ->
-                        Parameter(firValueParameter.name, firValueParameter.returnTypeRef.coneType)
-                    }
-                )
-            }
+            .map { function -> function.toMeta() }
             .associateBy { it.name }
 
         val key = DeclarationKey.SuspendifiedClass(owner, functions)
@@ -139,7 +132,7 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
             }
 
             is DeclarationKey.OriginalClass -> {
-                val nestedStubClasses = context.findClassSymbols(nestedClassName)
+                val nestedStubClasses = context.findClassSymbols(declarationKey.suspendifiedClassName)
                 if (nestedStubClasses.size == 1) {
                     val nestedStubClass = nestedStubClasses.first()
                     listOf(createSuspendifyMemberFunction(owner, nestedStubClass, callableId).symbol)
@@ -184,13 +177,13 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
 
     private fun createSuspendifyMemberFunction(
         originalClass: FirClassSymbol<*>,
-        nestedStubClass: FirClassSymbol<*>,
+        suspendifiedClass: FirClassSymbol<*>,
         callableId: CallableId,
     ): FirSimpleFunction {
-        val returnType = nestedStubClass.defaultType()
+        val returnType = suspendifiedClass.defaultType()
         return createMemberFunction(
             owner = originalClass,
-            key = DeclarationKey.OriginalClassConvertMethod(nestedStubClass),
+            key = DeclarationKey.OriginalClassConvertMethod(suspendifiedClass.classId),
             name = callableId.callableName,
             returnType = returnType,
         ) {
@@ -233,9 +226,11 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
 
     private inline fun <reified K : DeclarationKey> FirClassSymbol<*>.getDeclarationKey(): K? =
         if (isSuspendifyAnnotated() && isClass) {
-            DeclarationKey.OriginalClass as? K
+            DeclarationKey.OriginalClass()
         } else {
-            (origin as? FirDeclarationOrigin.Plugin)?.key as? K
+            (origin as? FirDeclarationOrigin.Plugin)?.key
+        }.let {
+            it as? K
         }
 
     private fun MemberGenerationContext.findClassSymbols(name: Name): List<FirClassSymbol<*>> =
@@ -250,4 +245,16 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
 
     private fun FirClassSymbol<*>.isSuspendifyAnnotated() =
         annotations.any { annotation -> annotation.fqName(session) == markAnnotationFqdn }
+
+    private fun FirSimpleFunction.toMeta(): Function =
+        Function(
+            name = name,
+            returnType = returnTypeRef.coneType,
+            parameters = valueParameters.map { parameter ->
+                Parameter(
+                    name = parameter.name,
+                    type = parameter.returnTypeRef.coneType,
+                )
+            }
+        )
 }
