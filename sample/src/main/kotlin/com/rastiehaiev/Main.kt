@@ -1,7 +1,7 @@
 package com.rastiehaiev
 
-import io.github.rastiehaiev.CoroutineFriendly
 import io.github.rastiehaiev.IrDump
+import io.github.rastiehaiev.Suspendify
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -10,19 +10,16 @@ import kotlinx.coroutines.withContext
 @IrDump
 fun main() = runBlocking {
     val repository = Repository("Hello world!")
-    println(repository)
     println(repository.find())
 
-    val coroutineFriendlyRepository1 = repository.asCoroutineFriendly(Dispatchers.IO)
-    println(coroutineFriendlyRepository1.find())
-    coroutineFriendlyRepository1.save("Hey you")
-    println(coroutineFriendlyRepository1.find())
-
-    Unit
+    val suspendifiedRepository = repository.suspendify(Dispatchers.IO)
+    println(suspendifiedRepository)
+    suspendifiedRepository.save("Hey you")
+    println(suspendifiedRepository.find())
 }
 
 @IrDump
-@CoroutineFriendly
+@Suspendify
 class Repository(private val value: String) {
     fun find(): String = value
 
@@ -32,7 +29,7 @@ class Repository(private val value: String) {
 }
 
 @IrDump
-class RepositoryCoroutineFriendly(
+class RepositorySuspendified(
     private val delegate: Repository,
     private val dispatcher: CoroutineDispatcher,
 ) {
@@ -41,7 +38,6 @@ class RepositoryCoroutineFriendly(
             delegate.save(value)
         }
     }
-
 
     suspend fun find(): String =
         withContext(dispatcher) {

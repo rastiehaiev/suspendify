@@ -5,7 +5,7 @@ import org.jetbrains.kotlin.config.CompilerConfigurationKey
 
 private val KEY_ENABLED = CompilerConfigurationKey.create<Boolean>("enabled")
 
-class TemplateCompilerConfigurationKeys(
+class SuspendifyCompilerConfigurationKeys(
     private val config: CompilerConfiguration,
 ) {
 
@@ -17,4 +17,4 @@ class TemplateCompilerConfigurationKeys(
     }
 }
 
-fun CompilerConfiguration.toKeys(): TemplateCompilerConfigurationKeys = TemplateCompilerConfigurationKeys(this)
+fun CompilerConfiguration.toKeys(): SuspendifyCompilerConfigurationKeys = SuspendifyCompilerConfigurationKeys(this)

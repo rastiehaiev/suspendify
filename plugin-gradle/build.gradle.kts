@@ -22,10 +22,10 @@ gradlePlugin {
     website = project.resolveProperty("plugin.github.url")
     vcsUrl = project.resolveProperty("plugin.github.url.vcs")
     plugins {
-        create("kotlinCompilerPluginTemplate") {
+        create("suspendifyPlugin") {
             id = "${deployConfiguration.groupId}.${deployConfiguration.gradleArtifactId}"
-            displayName = "Gradle compiler plugin"
-            implementationClass = "${deployConfiguration.groupId}.CoroutineFriendlyGradlePlugin"
+            displayName = deployConfiguration.gradleArtifactId
+            implementationClass = "${deployConfiguration.groupId}.SuspendifyGradlePlugin"
             description = deployConfiguration.gradleArtifactDescription
             tags.set(listOf("compiler", "kotlin"))
         }

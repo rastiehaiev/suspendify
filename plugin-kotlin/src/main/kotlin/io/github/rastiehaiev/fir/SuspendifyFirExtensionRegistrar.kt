@@ -1,6 +1,6 @@
 package io.github.rastiehaiev.fir
 
-import io.github.rastiehaiev.CoroutineFriendlyKey
+import io.github.rastiehaiev.SuspendifyKey
 import org.jetbrains.kotlin.GeneratedDeclarationKey
 import org.jetbrains.kotlin.descriptors.Modality
 import org.jetbrains.kotlin.descriptors.Visibilities
@@ -35,21 +35,21 @@ import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.name.SpecialNames
 
-class CoroutineFriendlyFirExtensionRegistrar : FirExtensionRegistrar() {
+class SuspendifyFirExtensionRegistrar : FirExtensionRegistrar() {
     override fun ExtensionRegistrarContext.configurePlugin() {
         +::MyFirDeclarationGenerationExtension
     }
 }
 
 private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDeclarationGenerationExtension(session) {
-    private val nestedClassName = Name.identifier("CoroutineFriendly")
+    private val nestedClassName = Name.identifier("Suspendified")
     private val nestedClassDelegateValName = Name.identifier("delegate")
     private val nestedClassDispatcherValName = Name.identifier("dispatcher")
 
     private val markAnnotationFqdn: FqName =
         ClassId(
             packageFqName = FqName("io.github.rastiehaiev"),
-            topLevelName = Name.identifier("CoroutineFriendly"),
+            topLevelName = Name.identifier("Suspendify"),
         ).asSingleFqName()
 
     private val coroutineDispatcherClassId = ClassId(
@@ -65,8 +65,8 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
         classSymbol: FirClassSymbol<*>,
         context: NestedClassGenerationContext,
     ): Set<Name> {
-        return when (classSymbol.getDeclarationKey<CoroutineFriendlyKey>()) {
-            is CoroutineFriendlyKey.OriginalClass -> setOf(nestedClassName)
+        return when (classSymbol.getDeclarationKey<SuspendifyKey>()) {
+            is SuspendifyKey.OriginalClass -> setOf(nestedClassName)
             else -> super.getNestedClassifiersNames(classSymbol, context)
         }
     }
@@ -89,7 +89,7 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
             .filterIsInstance<FirSimpleFunction>()
             .associateBy { it.name }
 
-        val key = CoroutineFriendlyKey.NestedStubClass(owner, functions)
+        val key = SuspendifyKey.NestedStubClass(owner, functions)
         return createNestedClass(owner, name, key) {
             visibility = Visibilities.Public
             modality = Modality.FINAL
@@ -97,12 +97,12 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
     }
 
     override fun getCallableNamesForClass(classSymbol: FirClassSymbol<*>, context: MemberGenerationContext) =
-        when (val declarationKey = classSymbol.getDeclarationKey<CoroutineFriendlyKey>()) {
-            is CoroutineFriendlyKey.OriginalClass -> {
-                setOf(Name.identifier("asCoroutineFriendly"))
+        when (val declarationKey = classSymbol.getDeclarationKey<SuspendifyKey>()) {
+            is SuspendifyKey.OriginalClass -> {
+                setOf(Name.identifier("suspendify"))
             }
 
-            is CoroutineFriendlyKey.NestedStubClass -> {
+            is SuspendifyKey.NestedStubClass -> {
                 declarationKey.functions.map { Name.identifier(it.key.identifier) }.toSet() + listOf(
                     SpecialNames.INIT,
                     nestedClassDelegateValName,
@@ -118,8 +118,8 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
         context: MemberGenerationContext?,
     ): List<FirNamedFunctionSymbol> {
         val owner = context?.owner
-        return when (val declarationKey = owner?.getDeclarationKey<CoroutineFriendlyKey>()) {
-            is CoroutineFriendlyKey.NestedStubClass -> {
+        return when (val declarationKey = owner?.getDeclarationKey<SuspendifyKey>()) {
+            is SuspendifyKey.NestedStubClass -> {
                 val function = declarationKey.functions[callableId.callableName]
                 if (function != null) {
                     val func =
@@ -130,11 +130,11 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
                 }
             }
 
-            is CoroutineFriendlyKey.OriginalClass -> {
+            is SuspendifyKey.OriginalClass -> {
                 val nestedStubClasses = context.findClassSymbols(nestedClassName)
                 if (nestedStubClasses.size == 1) {
                     val nestedStubClass = nestedStubClasses.first()
-                    listOf(createAsCoroutineFriendlyMemberFunction(owner, nestedStubClass, callableId).symbol)
+                    listOf(createSuspendifyMemberFunction(owner, nestedStubClass, callableId).symbol)
                 } else {
                     emptyList()
                 }
@@ -152,7 +152,7 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
         function: FirSimpleFunction,
         callableId: CallableId,
     ): FirSimpleFunction {
-        val key = CoroutineFriendlyKey.NestedStubClassFunction(originalClass, nestedStubClass, function)
+        val key = SuspendifyKey.NestedStubClassFunction(originalClass, nestedStubClass, function)
 
         val memberFunction = createMemberFunction(
             owner = nestedStubClass,
@@ -174,7 +174,7 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
         return memberFunction
     }
 
-    private fun createAsCoroutineFriendlyMemberFunction(
+    private fun createSuspendifyMemberFunction(
         originalClass: FirClassSymbol<*>,
         nestedStubClass: FirClassSymbol<*>,
         callableId: CallableId,
@@ -182,7 +182,7 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
         val returnType = nestedStubClass.defaultType()
         return createMemberFunction(
             owner = originalClass,
-            key = CoroutineFriendlyKey.OriginalClassConvertMethod(nestedStubClass),
+            key = SuspendifyKey.OriginalClassConvertMethod(nestedStubClass),
             name = callableId.callableName,
             returnType = returnType,
         ) {
@@ -194,11 +194,11 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
     }
 
     override fun generateConstructors(context: MemberGenerationContext): List<FirConstructorSymbol> {
-        val declarationKey = context.owner.getDeclarationKey<CoroutineFriendlyKey.NestedStubClass>()
+        val declarationKey = context.owner.getDeclarationKey<SuspendifyKey.NestedStubClass>()
         return if (declarationKey != null) {
             val constructor = createConstructor(
                 owner = context.owner,
-                key = CoroutineFriendlyKey.NestedStubClassConstructor(declarationKey.originalClass, context.owner),
+                key = SuspendifyKey.NestedStubClassConstructor(declarationKey.originalClass, context.owner),
                 isPrimary = true,
                 generateDelegatedNoArgConstructorCall = false,
             ) {
@@ -218,42 +218,12 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
         }
     }
 
-    /*override fun generateProperties(
-        callableId: CallableId,
-        context: MemberGenerationContext?,
-    ): List<FirPropertySymbol> {
-        val declarationKey = context?.owner?.getDeclarationKey<CoroutineFriendlyKey.NestedStubClass>()
-        return if (declarationKey != null && callableId.callableName in setOf(
-                nestedClassDelegateValName,
-                nestedClassDispatcherValName
-            )
-        ) {
-            val returnType = if (callableId.callableName == nestedClassDispatcherValName) {
-                coroutineDispatcherClassId.findFirClassSymbol().defaultType()
-            } else {
-                declarationKey.originalClass.defaultType()
-            }
-            val memberProperty = createMemberProperty(
-                owner = context.owner,
-                key = CoroutineFriendlyKey.NestedStubClassProperty(declarationKey.originalClass, context.owner),
-                name = callableId.callableName,
-                returnType = returnType,
-            ) {
-                visibility = Visibilities.Private
-                modality = Modality.FINAL
-            }
-            listOf(memberProperty.symbol)
-        } else {
-            super.generateProperties(callableId, context)
-        }
-    }*/
-
-    private inline fun <reified K : CoroutineFriendlyKey> FirClassSymbol<*>.getDeclarationKey(): K? =
+    private inline fun <reified K : SuspendifyKey> FirClassSymbol<*>.getDeclarationKey(): K? =
         getDeclarationKey(this) as? K
 
     private fun getDeclarationKey(classSymbol: FirClassSymbol<*>): GeneratedDeclarationKey? =
-        if (classSymbol.isCoroutineFriendlyAnnotated() && classSymbol.isClass) {
-            CoroutineFriendlyKey.OriginalClass
+        if (classSymbol.isSuspendifyAnnotated() && classSymbol.isClass) {
+            SuspendifyKey.OriginalClass
         } else {
             (classSymbol.origin as? FirDeclarationOrigin.Plugin)?.key
         }
@@ -268,6 +238,6 @@ private class MyFirDeclarationGenerationExtension(session: FirSession) : FirDecl
             as? FirClassSymbol<*>
             ?: error("Could not find class by ID=$this.")
 
-    private fun FirClassSymbol<*>.isCoroutineFriendlyAnnotated() =
+    private fun FirClassSymbol<*>.isSuspendifyAnnotated() =
         annotations.any { annotation -> annotation.fqName(session) == markAnnotationFqdn }
 }

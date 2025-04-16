@@ -7,7 +7,7 @@ import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import org.jetbrains.kotlin.config.CompilerConfiguration
 
 @OptIn(ExperimentalCompilerApi::class)
-class CoroutineFriendlyCommandLineProcessor : CommandLineProcessor {
+class SuspendifyCommandLineProcessor : CommandLineProcessor {
     override val pluginId = with(PluginConfiguration) { "$GROUP_ID.$ARTIFACT_ID_GRADLE" }
 
     override val pluginOptions = listOf(

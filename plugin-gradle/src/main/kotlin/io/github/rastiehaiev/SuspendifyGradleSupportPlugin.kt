@@ -7,7 +7,7 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinCompilerPluginSupportPlugin
 import org.jetbrains.kotlin.gradle.plugin.SubpluginArtifact
 import org.jetbrains.kotlin.gradle.plugin.SubpluginOption
 
-class CoroutineFriendlyGradleSupportPlugin : KotlinCompilerPluginSupportPlugin {
+class SuspendifyGradleSupportPlugin : KotlinCompilerPluginSupportPlugin {
 
     override fun applyToCompilation(
         kotlinCompilation: KotlinCompilation<*>,
@@ -23,7 +23,7 @@ class CoroutineFriendlyGradleSupportPlugin : KotlinCompilerPluginSupportPlugin {
     }
 
     override fun isApplicable(kotlinCompilation: KotlinCompilation<*>) = with(kotlinCompilation.target.project) {
-        plugins.hasPlugin(CoroutineFriendlyGradleSupportPlugin::class.java) && getExtension().enabled
+        plugins.hasPlugin(SuspendifyGradleSupportPlugin::class.java) && getExtension().enabled
     }
 
     override fun getCompilerPluginId(): String = with(PluginConfiguration) { "$GROUP_ID.$ARTIFACT_ID_GRADLE" }
@@ -36,6 +36,6 @@ class CoroutineFriendlyGradleSupportPlugin : KotlinCompilerPluginSupportPlugin {
         )
     }
 
-    private fun Project.getExtension(): CoroutineFriendlyGradlePluginExtension =
-        extensions.findByType(CoroutineFriendlyGradlePluginExtension::class.java) ?: CoroutineFriendlyGradlePluginExtension()
+    private fun Project.getExtension(): SuspendifyGradlePluginExtension =
+        extensions.findByType(SuspendifyGradlePluginExtension::class.java) ?: SuspendifyGradlePluginExtension()
 }

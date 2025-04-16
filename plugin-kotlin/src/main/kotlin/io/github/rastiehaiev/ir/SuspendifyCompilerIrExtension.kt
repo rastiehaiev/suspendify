@@ -1,6 +1,6 @@
 package io.github.rastiehaiev.ir
 
-import io.github.rastiehaiev.CoroutineFriendlyKey
+import io.github.rastiehaiev.SuspendifyKey
 import io.github.rastiehaiev.log
 import org.jetbrains.kotlin.backend.common.extensions.IrGenerationExtension
 import org.jetbrains.kotlin.backend.common.extensions.IrPluginContext
@@ -14,7 +14,6 @@ import org.jetbrains.kotlin.ir.builders.declarations.IrValueParameterBuilder
 import org.jetbrains.kotlin.ir.builders.declarations.addBackingField
 import org.jetbrains.kotlin.ir.builders.declarations.addDefaultGetter
 import org.jetbrains.kotlin.ir.builders.declarations.addProperty
-import org.jetbrains.kotlin.ir.builders.declarations.buildField
 import org.jetbrains.kotlin.ir.builders.declarations.buildFun
 import org.jetbrains.kotlin.ir.builders.declarations.buildValueParameter
 import org.jetbrains.kotlin.ir.builders.irBlockBody
@@ -26,7 +25,6 @@ import org.jetbrains.kotlin.ir.builders.irString
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrConstructor
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
-import org.jetbrains.kotlin.ir.declarations.IrField
 import org.jetbrains.kotlin.ir.declarations.IrFunction
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
 import org.jetbrains.kotlin.ir.declarations.IrProperty
@@ -62,13 +60,13 @@ import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.name.SpecialNames
 
-class CoroutineFriendlyCompilerIrExtension : IrGenerationExtension {
+class SuspendifyCompilerIrExtension : IrGenerationExtension {
     override fun generate(moduleFragment: IrModuleFragment, pluginContext: IrPluginContext) {
-        moduleFragment.transformChildrenVoid(MyBodyTransformer(pluginContext))
+        moduleFragment.transformChildrenVoid(SuspendifyTransformer(pluginContext))
     }
 }
 
-class MyBodyTransformer(private val pluginContext: IrPluginContext) : IrElementTransformerVoid() {
+private class SuspendifyTransformer(private val pluginContext: IrPluginContext) : IrElementTransformerVoid() {
     private val suspendFunction1ClassId = ClassId(
         packageFqName = FqName("kotlin.coroutines"),
         topLevelName = Name.identifier("SuspendFunction1"),
@@ -87,7 +85,7 @@ class MyBodyTransformer(private val pluginContext: IrPluginContext) : IrElementT
     )
 
     override fun visitConstructor(declaration: IrConstructor): IrStatement {
-        val pluginKey = declaration.origin.getPluginKey<CoroutineFriendlyKey.NestedStubClassConstructor>()
+        val pluginKey = declaration.origin.getPluginKey<SuspendifyKey.NestedStubClassConstructor>()
             ?: return super.visitConstructor(declaration)
 
         declaration.body = irBuilder(declaration.symbol).irBlockBody {
@@ -101,8 +99,6 @@ class MyBodyTransformer(private val pluginContext: IrPluginContext) : IrElementT
         }
 
         val nestedStubClass = declaration.parentAsClass
-
-        log("Nested declarations: ${nestedStubClass.declarations}")
 
         val coroutineDispatcherType = pluginContext.findClassSymbol(coroutineDispatcherClassId).defaultType
         val delegateType = pluginContext.findClassSymbol(pluginKey.originalClass.classId).defaultType
@@ -140,38 +136,9 @@ class MyBodyTransformer(private val pluginContext: IrPluginContext) : IrElementT
             property.addDefaultGetter(nestedStubClass, pluginContext.irBuiltIns) {
                 visibility = DescriptorVisibilities.PRIVATE
             }
-
-            log("HHHHHHHHHHHHHHHH")
-            log(nestedStubClass.dump())
         }
 
         return super.visitConstructor(declaration)
-    }
-
-    private fun IrProperty.buildBackingField(
-        fieldName: Name,
-        fieldType: IrType,
-        fieldValueParameter: IrValueParameter,
-    ): IrField {
-        val property = this
-        return factory.buildField {
-            name = fieldName
-            origin = IrDeclarationOrigin.PROPERTY_BACKING_FIELD
-            visibility = DescriptorVisibilities.PRIVATE
-            type = fieldType
-        }.apply {
-            parent = property.parent
-            correspondingPropertySymbol = property.symbol
-            initializer = factory.createExpressionBody(
-                IrGetValueImpl(
-                    startOffset = UNDEFINED_OFFSET,
-                    endOffset = UNDEFINED_OFFSET,
-                    type = fieldValueParameter.type,
-                    symbol = fieldValueParameter.symbol,
-                    origin = IrStatementOrigin.INITIALIZE_PROPERTY_FROM_PARAMETER,
-                )
-            )
-        }
     }
 
     private fun IrProperty.addDefaultGetter(
@@ -193,20 +160,19 @@ class MyBodyTransformer(private val pluginContext: IrPluginContext) : IrElementT
         }
 
     override fun visitFunction(declaration: IrFunction): IrStatement {
-        when (val pluginKey = declaration.origin.getPluginKey<CoroutineFriendlyKey>()) {
-            is CoroutineFriendlyKey.NestedStubClassFunction -> {
+        when (val pluginKey = declaration.origin.getPluginKey<SuspendifyKey>()) {
+            is SuspendifyKey.NestedStubClassFunction -> {
                 declaration.body = try {
                     pluginKey.createSuspendFunctionBlockBody(declaration)
                 } catch (t: Throwable) {
-                    log("Exception: ${t.message}")
                     null
                 } ?: callTodoFunction(declaration)
 
                 log("Parent:\n${declaration.parent.dump()}")
             }
 
-            is CoroutineFriendlyKey.OriginalClassConvertMethod -> {
-                declaration.body = pluginKey.createCoroutineFriendlyInstanceBlockBody(declaration)
+            is SuspendifyKey.OriginalClassConvertMethod -> {
+                declaration.body = pluginKey.createSuspendifyInstanceBlockBody(declaration)
             }
 
             else -> {}
@@ -214,7 +180,7 @@ class MyBodyTransformer(private val pluginContext: IrPluginContext) : IrElementT
         return super.visitFunction(declaration)
     }
 
-    private fun CoroutineFriendlyKey.OriginalClassConvertMethod.createCoroutineFriendlyInstanceBlockBody(
+    private fun SuspendifyKey.OriginalClassConvertMethod.createSuspendifyInstanceBlockBody(
         declaration: IrFunction,
     ): IrBlockBody {
         val constructorSymbol = pluginContext.findClassSymbol(nestedStubClass.classId)
@@ -238,7 +204,7 @@ class MyBodyTransformer(private val pluginContext: IrPluginContext) : IrElementT
         }
     }
 
-    private fun CoroutineFriendlyKey.NestedStubClassFunction.createSuspendFunctionBlockBody(
+    private fun SuspendifyKey.NestedStubClassFunction.createSuspendFunctionBlockBody(
         declaration: IrFunction,
     ): IrBlockBody? {
         val nestedClassSymbol: IrClassSymbol = pluginContext.findClassSymbol(nestedStubClass.classId)
@@ -263,14 +229,12 @@ class MyBodyTransformer(private val pluginContext: IrPluginContext) : IrElementT
                 val geTypes = generatedFuncParameters.map { it.name to it.type }
                 originalFuncParameters.size == generatedFuncParameters.size && orTypes == geTypes
             } ?: run {
-            log("Expected function(((")
             return null
         }
 
         // SuspendFunction1<CoroutineScope, T>
         val coroutineScopeType = pluginContext.findClassSymbol(coroutineScopeClassId).defaultType
         val coroutineDispatcherType = pluginContext.findClassSymbol(coroutineDispatcherClassId).defaultType
-
 
         val a1 = pluginContext.findClassSymbol(
             ClassId(
@@ -350,10 +314,6 @@ class MyBodyTransformer(private val pluginContext: IrPluginContext) : IrElementT
                 +irReturn(call)
             }
         }
-
-        if (declaration.name == Name.identifier("save")) {
-            log(result.dump())
-        }
         return result
     }
 
@@ -374,7 +334,7 @@ class MyBodyTransformer(private val pluginContext: IrPluginContext) : IrElementT
         }
     }
 
-    private inline fun <reified K : CoroutineFriendlyKey> IrDeclarationOrigin.getPluginKey(): K? {
+    private inline fun <reified K : SuspendifyKey> IrDeclarationOrigin.getPluginKey(): K? {
         val generatedByPlugin = this as? IrDeclarationOrigin.GeneratedByPlugin ?: return null
         return generatedByPlugin.pluginKey as K
     }
