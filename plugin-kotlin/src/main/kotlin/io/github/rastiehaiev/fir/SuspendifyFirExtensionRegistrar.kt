@@ -2,6 +2,7 @@ package io.github.rastiehaiev.fir
 
 import io.github.rastiehaiev.model.DeclarationKey
 import io.github.rastiehaiev.model.Function
+import io.github.rastiehaiev.model.Meta
 import io.github.rastiehaiev.model.Parameter
 import org.jetbrains.kotlin.descriptors.Modality
 import org.jetbrains.kotlin.descriptors.Visibilities
@@ -45,19 +46,11 @@ class SuspendifyFirExtensionRegistrar : FirExtensionRegistrar() {
 private class SuspendifyDeclarationGenerationExtension(
     session: FirSession,
 ) : FirDeclarationGenerationExtension(session) {
-    private val nestedClassDelegateValName = Name.identifier("delegate")
-    private val nestedClassDispatcherValName = Name.identifier("dispatcher")
-
     private val markAnnotationFqdn: FqName =
         ClassId(
             packageFqName = FqName("io.github.rastiehaiev"),
             topLevelName = Name.identifier("Suspendify"),
         ).asSingleFqName()
-
-    private val coroutineDispatcherClassId = ClassId(
-        packageFqName = FqName("kotlinx.coroutines"),
-        topLevelName = Name.identifier("CoroutineDispatcher"),
-    )
 
     override fun FirDeclarationPredicateRegistrar.registerPredicates() {
         register(DeclarationPredicate.create { annotated(markAnnotationFqdn) })
@@ -67,8 +60,8 @@ private class SuspendifyDeclarationGenerationExtension(
         classSymbol: FirClassSymbol<*>,
         context: NestedClassGenerationContext,
     ): Set<Name> =
-        when (val declarationKey = classSymbol.getDeclarationKey<DeclarationKey>()) {
-            is DeclarationKey.OriginalClass -> setOf(declarationKey.suspendifiedClassName)
+        when (classSymbol.getDeclarationKey<DeclarationKey>()) {
+            is DeclarationKey.OriginalClass -> setOf(Meta.SuspendifiedClass.name)
             else -> emptySet()
         }
 
@@ -78,7 +71,7 @@ private class SuspendifyDeclarationGenerationExtension(
         context: NestedClassGenerationContext,
     ): FirClassLikeSymbol<*>? {
         val declarationKey = owner.getDeclarationKey<DeclarationKey.OriginalClass>()
-        return if (declarationKey != null && name == declarationKey.suspendifiedClassName) {
+        return if (declarationKey != null && name == Meta.SuspendifiedClass.name) {
             createNestedClassStub(owner, name).symbol
         } else {
             super.generateNestedClassLikeDeclaration(owner, name, context)
@@ -89,7 +82,7 @@ private class SuspendifyDeclarationGenerationExtension(
     private fun createNestedClassStub(owner: FirClassSymbol<*>, name: Name): FirRegularClass {
         val functions = owner.fir.declarations
             .filterIsInstance<FirSimpleFunction>()
-            .map { function -> function.toMeta() }
+            .map { function -> function.toMetaFunction() }
             .associateBy { it.name }
 
         val key = DeclarationKey.SuspendifiedClass(owner, functions)
@@ -101,17 +94,16 @@ private class SuspendifyDeclarationGenerationExtension(
 
     override fun getCallableNamesForClass(classSymbol: FirClassSymbol<*>, context: MemberGenerationContext) =
         when (val declarationKey = classSymbol.getDeclarationKey<DeclarationKey>()) {
-            is DeclarationKey.OriginalClass -> setOf(Name.identifier("suspendify"))
-
+            is DeclarationKey.OriginalClass -> setOf(Meta.OriginalClass.factoryMethodName)
             is DeclarationKey.SuspendifiedClass -> {
-                declarationKey.functions.map { Name.identifier(it.key.identifier) }.toSet() + listOf(
+                declarationKey.functions.keys + listOf(
                     SpecialNames.INIT,
-                    nestedClassDelegateValName,
-                    nestedClassDispatcherValName,
+                    Meta.SuspendifiedClass.delegateParameterName,
+                    Meta.SuspendifiedClass.dispatcherParameter.name,
                 )
             }
 
-            else -> super.getCallableNamesForClass(classSymbol, context)
+            else -> emptySet()
         }
 
     override fun generateFunctions(
@@ -120,80 +112,61 @@ private class SuspendifyDeclarationGenerationExtension(
     ): List<FirNamedFunctionSymbol> {
         val owner = context?.owner
         return when (val declarationKey = owner?.getDeclarationKey<DeclarationKey>()) {
-            is DeclarationKey.SuspendifiedClass -> {
-                val function = declarationKey.functions[callableId.callableName]
-                if (function != null) {
-                    val func =
-                        createSuspendedStubClassFunction(declarationKey.originalClass, owner, function, callableId)
-                    listOf(func.symbol)
-                } else {
-                    emptyList()
-                }
-            }
-
-            is DeclarationKey.OriginalClass -> {
-                val nestedStubClasses = context.findClassSymbols(declarationKey.suspendifiedClassName)
-                if (nestedStubClasses.size == 1) {
-                    val nestedStubClass = nestedStubClasses.first()
-                    listOf(createSuspendifyMemberFunction(owner, nestedStubClass, callableId).symbol)
-                } else {
-                    emptyList()
-                }
-            }
-
-            else -> {
-                super.generateFunctions(callableId, context)
-            }
+            is DeclarationKey.SuspendifiedClass -> declarationKey.createSuspendedFunction(callableId, owner)
+            is DeclarationKey.OriginalClass -> context.createSuspendifyFunctionInOriginalClass(callableId, owner)
+            else -> emptyList()
         }
     }
 
-    private fun createSuspendedStubClassFunction(
-        originalClass: FirClassSymbol<*>,
-        suspendifiedClass: FirClassSymbol<*>,
-        function: Function,
+    private fun DeclarationKey.SuspendifiedClass.createSuspendedFunction(
         callableId: CallableId,
-    ): FirSimpleFunction {
+        suspendifiedClass: FirClassSymbol<*>,
+    ): List<FirNamedFunctionSymbol> {
+        val function = functions[callableId.callableName] ?: return emptyList()
         val key = DeclarationKey.SuspendifiedClassFunction(
-            originalClass.classId,
-            suspendifiedClass.classId,
+            originalClassId = originalClass.classId,
+            suspendifiedClassId = suspendifiedClass.classId,
         )
-
-        val memberFunction = createMemberFunction(
+        val suspendedFunction = createMemberFunction(
             owner = suspendifiedClass,
             key = key,
             name = callableId.callableName,
             returnType = function.returnType,
         ) {
-
             function.parameters.forEach { parameter ->
                 with(parameter) { valueParameter(name, type) }
             }
-            status {
-                isSuspend = true
-            }
+            status { isSuspend = true }
         }
-        return memberFunction
+        return listOf(suspendedFunction.symbol)
     }
 
-    private fun createSuspendifyMemberFunction(
-        originalClass: FirClassSymbol<*>,
-        suspendifiedClass: FirClassSymbol<*>,
+    private fun MemberGenerationContext.createSuspendifyFunctionInOriginalClass(
         callableId: CallableId,
-    ): FirSimpleFunction {
-        val returnType = suspendifiedClass.defaultType()
-        return createMemberFunction(
+        originalClass: FirClassSymbol<*>,
+    ): List<FirNamedFunctionSymbol> {
+        val suspendifiedClass = findClassSymbols(Meta.SuspendifiedClass.name)
+            .takeIf { it.size == 1 }
+            ?.first()
+            ?: return emptyList()
+
+
+        val suspendifyFunction = createMemberFunction(
             owner = originalClass,
             key = DeclarationKey.OriginalClassConvertMethod(suspendifiedClass.classId),
             name = callableId.callableName,
-            returnType = returnType,
+            returnType = suspendifiedClass.defaultType(),
         ) {
-            valueParameter(
-                name = Name.identifier("dispatcher"),
-                type = coroutineDispatcherClassId.findFirClassSymbol().defaultType(),
-                // should be Dispatchers.IO
-                hasDefaultValue = false,
-            )
+            with(Meta.SuspendifiedClass) {
+                valueParameter(
+                    name = dispatcherParameter.name,
+                    type = dispatcherParameter.type.findFirClassSymbol().defaultType(),
+                    // should be Dispatchers.IO
+                    hasDefaultValue = false,
+                )
+            }
         }
+        return listOf(suspendifyFunction.symbol)
     }
 
     override fun generateConstructors(context: MemberGenerationContext): List<FirConstructorSymbol> {
@@ -209,14 +182,16 @@ private class SuspendifyDeclarationGenerationExtension(
                 generateDelegatedNoArgConstructorCall = false,
             ) {
                 visibility = Visibilities.Private
-                valueParameter(
-                    name = Name.identifier("delegate"),
-                    type = declarationKey.originalClass.defaultType(),
-                )
-                valueParameter(
-                    name = Name.identifier("dispatcher"),
-                    type = coroutineDispatcherClassId.findFirClassSymbol().defaultType(),
-                )
+                with(Meta.SuspendifiedClass) {
+                    valueParameter(
+                        name = delegateParameterName,
+                        type = declarationKey.originalClass.defaultType(),
+                    )
+                    valueParameter(
+                        name = dispatcherParameter.name,
+                        type = dispatcherParameter.type.findFirClassSymbol().defaultType(),
+                    )
+                }
             }
             listOf(constructor.symbol)
         } else {
@@ -226,7 +201,7 @@ private class SuspendifyDeclarationGenerationExtension(
 
     private inline fun <reified K : DeclarationKey> FirClassSymbol<*>.getDeclarationKey(): K? =
         if (isSuspendifyAnnotated() && isClass) {
-            DeclarationKey.OriginalClass()
+            DeclarationKey.OriginalClass
         } else {
             (origin as? FirDeclarationOrigin.Plugin)?.key
         }.let {
@@ -246,7 +221,7 @@ private class SuspendifyDeclarationGenerationExtension(
     private fun FirClassSymbol<*>.isSuspendifyAnnotated() =
         annotations.any { annotation -> annotation.fqName(session) == markAnnotationFqdn }
 
-    private fun FirSimpleFunction.toMeta(): Function =
+    private fun FirSimpleFunction.toMetaFunction(): Function =
         Function(
             name = name,
             returnType = returnTypeRef.coneType,

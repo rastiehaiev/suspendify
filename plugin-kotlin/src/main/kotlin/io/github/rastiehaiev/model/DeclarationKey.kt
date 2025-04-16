@@ -6,12 +6,7 @@ import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.Name
 
 sealed class DeclarationKey : GeneratedDeclarationKey() {
-    class OriginalClass : DeclarationKey() {
-        var suspendifiedClassName: Name = Name.identifier("Suspendified")
-            private set
-        var suspendifiedClassMethodName: Name = Name.identifier("suspendify")
-            private set
-    }
+    data object OriginalClass : DeclarationKey()
 
     class OriginalClassConvertMethod(
         val suspendifiedClassId: ClassId,
