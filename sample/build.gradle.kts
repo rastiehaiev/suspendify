@@ -1,5 +1,5 @@
 plugins {
-    kotlin("jvm") version "2.0.21"
+    kotlin("jvm") version "2.1.20"
     id("io.github.rastiehaiev.ir-dump") version "0.0.8"
     id("io.github.rastiehaiev.coroutine-friendly")
 }

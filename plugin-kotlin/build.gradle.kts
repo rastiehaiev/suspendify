@@ -21,3 +21,8 @@ kotlin {
         languageSettings.optIn("org.jetbrains.kotlin.ir.symbols.UnsafeDuringIrConstructionAPI")
     }
 }
+
+java {
+    withSourcesJar()
+    withJavadocJar()
+}

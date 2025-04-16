@@ -1,164 +1,397 @@
 package io.github.rastiehaiev.ir
 
+import io.github.rastiehaiev.CoroutineFriendlyKey
+import io.github.rastiehaiev.log
 import org.jetbrains.kotlin.backend.common.extensions.IrGenerationExtension
 import org.jetbrains.kotlin.backend.common.extensions.IrPluginContext
-import org.jetbrains.kotlin.backend.konan.serialization.KonanManglerIr.signatureString
+import org.jetbrains.kotlin.backend.common.lower.DeclarationIrBuilder
 import org.jetbrains.kotlin.descriptors.DescriptorVisibilities
-import org.jetbrains.kotlin.ir.AbstractIrFileEntry
-import org.jetbrains.kotlin.ir.IrElement
+import org.jetbrains.kotlin.descriptors.Modality
+import org.jetbrains.kotlin.ir.IrBuiltIns
+import org.jetbrains.kotlin.ir.IrStatement
+import org.jetbrains.kotlin.ir.UNDEFINED_OFFSET
+import org.jetbrains.kotlin.ir.builders.declarations.IrValueParameterBuilder
+import org.jetbrains.kotlin.ir.builders.declarations.addBackingField
+import org.jetbrains.kotlin.ir.builders.declarations.addDefaultGetter
+import org.jetbrains.kotlin.ir.builders.declarations.addProperty
+import org.jetbrains.kotlin.ir.builders.declarations.buildField
+import org.jetbrains.kotlin.ir.builders.declarations.buildFun
+import org.jetbrains.kotlin.ir.builders.declarations.buildValueParameter
+import org.jetbrains.kotlin.ir.builders.irBlockBody
+import org.jetbrains.kotlin.ir.builders.irCall
+import org.jetbrains.kotlin.ir.builders.irDelegatingConstructorCall
+import org.jetbrains.kotlin.ir.builders.irGet
+import org.jetbrains.kotlin.ir.builders.irReturn
+import org.jetbrains.kotlin.ir.builders.irString
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrConstructor
+import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
+import org.jetbrains.kotlin.ir.declarations.IrField
 import org.jetbrains.kotlin.ir.declarations.IrFunction
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
-import org.jetbrains.kotlin.ir.expressions.IrCall
+import org.jetbrains.kotlin.ir.declarations.IrProperty
+import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
+import org.jetbrains.kotlin.ir.declarations.IrValueParameter
+import org.jetbrains.kotlin.ir.declarations.createExpressionBody
+import org.jetbrains.kotlin.ir.expressions.IrBlockBody
+import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
+import org.jetbrains.kotlin.ir.expressions.impl.IrConstructorCallImpl
+import org.jetbrains.kotlin.ir.expressions.impl.IrFunctionExpressionImpl
+import org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl
+import org.jetbrains.kotlin.ir.expressions.impl.IrInstanceInitializerCallImpl
+import org.jetbrains.kotlin.ir.expressions.impl.fromSymbolOwner
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
-import org.jetbrains.kotlin.ir.types.IrSimpleType
+import org.jetbrains.kotlin.ir.symbols.IrFunctionSymbol
+import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
+import org.jetbrains.kotlin.ir.symbols.IrSymbol
 import org.jetbrains.kotlin.ir.types.IrType
-import org.jetbrains.kotlin.ir.types.classFqName
-import org.jetbrains.kotlin.ir.util.isFakeOverride
-import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
-import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
-import org.jetbrains.kotlin.ir.visitors.acceptVoid
+import org.jetbrains.kotlin.ir.types.addAnnotations
+import org.jetbrains.kotlin.ir.types.defaultType
+import org.jetbrains.kotlin.ir.types.typeWith
+import org.jetbrains.kotlin.ir.util.constructors
+import org.jetbrains.kotlin.ir.util.defaultType
+import org.jetbrains.kotlin.ir.util.dump
+import org.jetbrains.kotlin.ir.util.functions
+import org.jetbrains.kotlin.ir.util.getPropertyGetter
+import org.jetbrains.kotlin.ir.util.parentAsClass
+import org.jetbrains.kotlin.ir.visitors.IrElementTransformerVoid
+import org.jetbrains.kotlin.ir.visitors.transformChildrenVoid
 import org.jetbrains.kotlin.name.CallableId
+import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
-import java.io.File
-import java.nio.file.Files
+import org.jetbrains.kotlin.name.SpecialNames
 
 class CoroutineFriendlyCompilerIrExtension : IrGenerationExtension {
-
     override fun generate(moduleFragment: IrModuleFragment, pluginContext: IrPluginContext) {
-        val visitor = TemplateVisitor(moduleFragment, pluginContext)
-        moduleFragment.acceptVoid(visitor)
+        moduleFragment.transformChildrenVoid(MyBodyTransformer(pluginContext))
     }
 }
 
-private class TemplateVisitor(
-    private val moduleFragment: IrModuleFragment,
-    private val pluginContext: IrPluginContext,
-) : IrElementVisitorVoid {
+class MyBodyTransformer(private val pluginContext: IrPluginContext) : IrElementTransformerVoid() {
+    private val suspendFunction1ClassId = ClassId(
+        packageFqName = FqName("kotlin.coroutines"),
+        topLevelName = Name.identifier("SuspendFunction1"),
+    )
+    private val coroutineDispatcherClassId = ClassId(
+        packageFqName = FqName("kotlinx.coroutines"),
+        topLevelName = Name.identifier("CoroutineDispatcher"),
+    )
+    private val coroutineScopeClassId = ClassId(
+        packageFqName = FqName("kotlinx.coroutines"),
+        topLevelName = Name.identifier("CoroutineScope"),
+    )
+    private val withContextClassId = CallableId(
+        packageName = FqName("kotlinx.coroutines"),
+        callableName = Name.identifier("withContext"),
+    )
 
-    override fun visitElement(element: IrElement) {
-        element.acceptChildrenVoid(this)
-    }
+    override fun visitConstructor(declaration: IrConstructor): IrStatement {
+        val pluginKey = declaration.origin.getPluginKey<CoroutineFriendlyKey.NestedStubClassConstructor>()
+            ?: return super.visitConstructor(declaration)
 
-    override fun visitCall(expression: IrCall) {
-        super.visitCall(expression)
+        declaration.body = irBuilder(declaration.symbol).irBlockBody {
+            +irDelegatingConstructorCall(context.irBuiltIns.anyClass.owner.constructors.single())
+            +IrInstanceInitializerCallImpl(
+                startOffset = startOffset,
+                endOffset = endOffset,
+                classSymbol = pluginContext.findClassSymbol(pluginKey.nestedStubClass.classId),
+                type = context.irBuiltIns.unitType,
+            )
+        }
 
-        val asCoroutineFriendlyFuncCallableId = CallableId(
-            packageName = FqName("io.github.rastiehaiev"),
-            callableName = Name.identifier("asCoroutineFriendly"),
+        val nestedStubClass = declaration.parentAsClass
+
+        log("Nested declarations: ${nestedStubClass.declarations}")
+
+        val coroutineDispatcherType = pluginContext.findClassSymbol(coroutineDispatcherClassId).defaultType
+        val delegateType = pluginContext.findClassSymbol(pluginKey.originalClass.classId).defaultType
+
+        val valueParameters = listOf(
+            "delegate" to delegateType,
+            "dispatcher" to coroutineDispatcherType,
         )
 
-        val asCoroutineFriendlyFuncSymbol =
-            pluginContext.referenceFunctions(asCoroutineFriendlyFuncCallableId).firstOrNull()
+        val propertiesData = valueParameters.map { (valueParamName, valueParamType) ->
+            val valueParameter = declaration.valueParameters.first { it.name == Name.identifier(valueParamName) }
+            Triple(valueParamName, valueParamType, valueParameter)
+        }
 
-        if (expression.symbol == asCoroutineFriendlyFuncSymbol) {
-            expression.extensionReceiver?.let {
-                log("Extension receiver: $it")
-                log("Extension type: ${it.type}")
-                log("Extension type fq: ${it.type.classFqName}")
-                listPublicMethods(it.type)
+        propertiesData.forEach { (propertyName, propertyType, valueParameter) ->
+            val property = nestedStubClass.addProperty {
+                name = Name.identifier(propertyName)
+                visibility = DescriptorVisibilities.PRIVATE
             }
+
+            property.addBackingField {
+                type = propertyType
+            }.apply {
+                initializer = factory.createExpressionBody(
+                    IrGetValueImpl(
+                        startOffset = UNDEFINED_OFFSET,
+                        endOffset = UNDEFINED_OFFSET,
+                        type = valueParameter.type,
+                        symbol = valueParameter.symbol,
+                        origin = IrStatementOrigin.INITIALIZE_PROPERTY_FROM_PARAMETER,
+                    )
+                )
+            }
+
+            property.addDefaultGetter(nestedStubClass, pluginContext.irBuiltIns) {
+                visibility = DescriptorVisibilities.PRIVATE
+            }
+
+            log("HHHHHHHHHHHHHHHH")
+            log(nestedStubClass.dump())
         }
-        expression.acceptChildren(this, null)
+
+        return super.visitConstructor(declaration)
     }
 
-    private fun listPublicMethods(type: IrType) {
-        val simpleType = type.type as? IrSimpleType ?: return
-        val classSymbol = simpleType.classifier as? IrClassSymbol ?: return
-        val irClass: IrClass = classSymbol.owner
-
-        val publicMethods = irClass.declarations.filterIsInstance<IrFunction>()
-            .filter { it.visibility == DescriptorVisibilities.PUBLIC }
-            .filter { !it.isFakeOverride }
-            .filter { it !is IrConstructor }
-
-        // Print out or log the names of the public methods.
-        publicMethods.forEach { method ->
-            log("Method: ${method.signatureString(compatibleMode = true)}")
-        }
-    }
-
-    /*fun addGeneratedClassToModule(
-        pluginContext: IrPluginContext,
-        packageFragment: IrPackageFragment?,
-        originalType: IrClass,
-    ): Pair<IrFile, IrClass> {
-        // Generate the alternative class (e.g., RepositoryAsCoroutineFriendly).
-        val generatedClass = generateSuspendedAlternativeClass(pluginContext, originalType)
-
-        // Define the target package for your generated classes.
-        val targetPackage = FqName("io.github.rastiehaiev")
-        // Create a synthetic IR file for that package.
-        val syntheticFile = createSyntheticIrFile(packageFragment)
-        // Add your generated class to the file declarations.
-        syntheticFile.declarations.add(generatedClass)
-
-        // Register the synthetic file in the module fragment.
-        moduleFragment.files.add(syntheticFile)
-        return syntheticFile to generatedClass
-    }
-
-    fun createSyntheticIrFile(
-        packageFragment: IrPackageFragment?,
-    ): IrFile {
-        // A dummy file entry acts as the "source" reference for the synthetic file.
-        val fileEntry = DummySourceBasedFileEntryImpl("SyntheticFile.kt")
-        // Retrieve the package fragment from the module descriptor.
-
-        // Create and return the synthetic IR file.
-        return IrFileImpl(fileEntry, packageFragment!!.packageFragmentDescriptor)
-    }
-
-    fun generateSuspendedAlternativeClass(
-        pluginContext: IrPluginContext,
-        originalType: IrClass,
-    ): IrClass {
-        // Get the IR class of the original type.
-        val originalClassSymbol = originalType.symbol
-            ?: error("Original type is not an IrClass")
-        val originalName = originalClassSymbol.owner.name.asString() // e.g., "Repository"
-        // Append a suffix for the new class name.
-        val newClassName = "${originalName}AsCoroutineFriendly"
-
-        // Create a new IR class.
-        val newClass = pluginContext.irFactory.buildClass {
-            name = Name.identifier(newClassName)
-            kind = ClassKind.CLASS
-            visibility = DescriptorVisibilities.PUBLIC
+    private fun IrProperty.buildBackingField(
+        fieldName: Name,
+        fieldType: IrType,
+        fieldValueParameter: IrValueParameter,
+    ): IrField {
+        val property = this
+        return factory.buildField {
+            name = fieldName
+            origin = IrDeclarationOrigin.PROPERTY_BACKING_FIELD
+            visibility = DescriptorVisibilities.PRIVATE
+            type = fieldType
         }.apply {
-            createImplicitParameterDeclarationWithWrappedDescriptor()
+            parent = property.parent
+            correspondingPropertySymbol = property.symbol
+            initializer = factory.createExpressionBody(
+                IrGetValueImpl(
+                    startOffset = UNDEFINED_OFFSET,
+                    endOffset = UNDEFINED_OFFSET,
+                    type = fieldValueParameter.type,
+                    symbol = fieldValueParameter.symbol,
+                    origin = IrStatementOrigin.INITIALIZE_PROPERTY_FROM_PARAMETER,
+                )
+            )
+        }
+    }
+
+    private fun IrProperty.addDefaultGetter(
+        parentClass: IrClass,
+        builtIns: IrBuiltIns,
+        configure: IrSimpleFunction.() -> Unit,
+    ) {
+        addDefaultGetter(parentClass, builtIns)
+
+        getterOrFail.apply {
+            dispatchReceiverParameter!!.origin = IrDeclarationOrigin.DEFINED
+            configure()
+        }
+    }
+
+    private val IrProperty.getterOrFail: IrSimpleFunction
+        get() {
+            return getter ?: error("'getter' should be present, but was null: ${dump()}")
         }
 
-        // Create a suspend function "hello" inside the generated class.
-        val helloFunction = pluginContext.irFactory.buildFun {
-            name = Name.identifier("hello")
-            returnType = pluginContext.irBuiltIns.unitType
-            visibility = DescriptorVisibilities.PUBLIC
+    override fun visitFunction(declaration: IrFunction): IrStatement {
+        when (val pluginKey = declaration.origin.getPluginKey<CoroutineFriendlyKey>()) {
+            is CoroutineFriendlyKey.NestedStubClassFunction -> {
+                declaration.body = try {
+                    pluginKey.createSuspendFunctionBlockBody(declaration)
+                } catch (t: Throwable) {
+                    log("Exception: ${t.message}")
+                    null
+                } ?: callTodoFunction(declaration)
+
+                log("Parent:\n${declaration.parent.dump()}")
+            }
+
+            is CoroutineFriendlyKey.OriginalClassConvertMethod -> {
+                declaration.body = pluginKey.createCoroutineFriendlyInstanceBlockBody(declaration)
+            }
+
+            else -> {}
+        }
+        return super.visitFunction(declaration)
+    }
+
+    private fun CoroutineFriendlyKey.OriginalClassConvertMethod.createCoroutineFriendlyInstanceBlockBody(
+        declaration: IrFunction,
+    ): IrBlockBody {
+        val constructorSymbol = pluginContext.findClassSymbol(nestedStubClass.classId)
+            .constructors
+            .firstOrNull()
+            ?: error("Expected constructor")
+
+        val delegateParam = declaration.dispatchReceiverParameter ?: error("Expected delegate param")
+        val dispatcherParam = declaration.valueParameters.firstOrNull() ?: error("Expected dispatcher param")
+
+        return irBuilder(declaration.symbol).irBlockBody {
+            +irReturn(
+                irCall(
+                    callee = constructorSymbol,
+                    type = declaration.returnType,
+                ).apply {
+                    putValueArgument(0, irGet(delegateParam))
+                    putValueArgument(1, irGet(dispatcherParam))
+                }
+            )
+        }
+    }
+
+    private fun CoroutineFriendlyKey.NestedStubClassFunction.createSuspendFunctionBlockBody(
+        declaration: IrFunction,
+    ): IrBlockBody? {
+        val nestedClassSymbol: IrClassSymbol = pluginContext.findClassSymbol(nestedStubClass.classId)
+        val originalClassSymbol: IrClassSymbol = pluginContext.findClassSymbol(originalClass.classId)
+        val declarationClass = declaration.parent as IrClass
+
+        val withContextFunction: IrFunctionSymbol = pluginContext.referenceFunctions(withContextClassId)
+            .firstOrNull { it.owner.valueParameters.size == 2 }
+            ?: error("Expected function withContext")
+
+        val delegateGetterSymbol: IrSimpleFunctionSymbol = nestedClassSymbol.getPropertyGetter("delegate")
+            ?: error("Delegate not found")
+
+        val dispatcherGetterSymbol = nestedClassSymbol.getPropertyGetter("dispatcher") ?: error("Dispatcher not found")
+
+        val originalFunction: IrSimpleFunction = originalClassSymbol.owner.functions
+            .filter { it.name == declaration.name }
+            .firstOrNull { func ->
+                val originalFuncParameters = func.valueParameters
+                val generatedFuncParameters = declaration.valueParameters
+                val orTypes = originalFuncParameters.map { it.name to it.type }
+                val geTypes = generatedFuncParameters.map { it.name to it.type }
+                originalFuncParameters.size == generatedFuncParameters.size && orTypes == geTypes
+            } ?: run {
+            log("Expected function(((")
+            return null
+        }
+
+        // SuspendFunction1<CoroutineScope, T>
+        val coroutineScopeType = pluginContext.findClassSymbol(coroutineScopeClassId).defaultType
+        val coroutineDispatcherType = pluginContext.findClassSymbol(coroutineDispatcherClassId).defaultType
+
+
+        val a1 = pluginContext.findClassSymbol(
+            ClassId(
+                packageFqName = FqName("kotlin"),
+                topLevelName = Name.identifier("ExtensionFunctionType")
+            )
+        )
+        val a2 = a1.constructors.first()
+
+        val extensionAnnotation = IrConstructorCallImpl.fromSymbolOwner(
+            startOffset = 0,
+            endOffset = 0,
+            type = a1.defaultType,
+            constructorSymbol = a2,
+        )
+
+        val lambdaType = pluginContext.findClassSymbol(suspendFunction1ClassId)
+            .typeWith(coroutineScopeType, declaration.returnType)
+            .addAnnotations(newAnnotations = listOf(extensionAnnotation))
+
+        val functionLambda = declaration.factory.buildFun {
+            origin = IrDeclarationOrigin.LOCAL_FUNCTION_FOR_LAMBDA
+            name = SpecialNames.ANONYMOUS
+            visibility = DescriptorVisibilities.LOCAL
+            modality = Modality.FINAL
+            returnType = declaration.returnType
             isSuspend = true
         }.apply {
-            parent = newClass
-            // Create a simple empty body, e.g., using a block body with dummy offsets.
-            body = pluginContext.irFactory.createBlockBody(0, 0)
+            parent = declaration
+            body = irBuilder(symbol).irBlockBody {
+                +irReturn(
+                    irCall(
+                        callee = originalFunction.symbol,
+                        type = declaration.returnType,
+                    ).apply {
+                        dispatchReceiver = irCall(delegateGetterSymbol).apply {
+                            origin = IrStatementOrigin.GET_PROPERTY
+                            dispatchReceiver =
+                                irGet(declaration.dispatchReceiverParameter!!, type = declarationClass.defaultType)
+                        }
+
+                        declaration.valueParameters.forEachIndexed { index, param: IrValueParameter ->
+                            putValueArgument(index, irGet(param))
+                        }
+                    }
+                )
+            }
+            addExtensionReceiver(coroutineScopeType, name = Name.identifier("\$this\$withContext"))
         }
 
-        // Add the function to the new class.
-        newClass.declarations.add(helloFunction)
+        val lambda = IrFunctionExpressionImpl(
+            startOffset = UNDEFINED_OFFSET,
+            endOffset = UNDEFINED_OFFSET,
+            type = lambdaType,
+            origin = IrStatementOrigin.LAMBDA,
+            function = functionLambda,
+        )
 
-        return newClass
-    }*/
-}
+        val result = irBuilder(declaration.symbol).irBlockBody {
+            val call = irCall(
+                callee = withContextFunction,
+                type = declaration.returnType,
+            ).apply {
+                putTypeArgument(0, declaration.returnType)
 
-private fun log(message: String) {
-    File("/Users/roman/dev/project/personal/suspensify-kotlin-compiler-plugin").resolve("output.txt")
-        .also { if (!it.exists()) Files.createFile(it.toPath()) }
-        .appendText("\n$message")
-}
+                val valueArgument = irCall(dispatcherGetterSymbol, type = coroutineDispatcherType).apply {
+                    origin = IrStatementOrigin.GET_PROPERTY
+                    dispatchReceiver =
+                        irGet(declaration.dispatchReceiverParameter!!, type = declarationClass.defaultType)
+                }
+                putValueArgument(0, valueArgument)
+                putValueArgument(1, lambda)
+            }
+            if (declaration.returnType == context.irBuiltIns.unitType) {
+                +call
+            } else {
+                +irReturn(call)
+            }
+        }
 
-private class DummySourceBasedFileEntryImpl(
-    override val name: String,
-) : AbstractIrFileEntry() {
-    override val lineStartOffsets: IntArray = intArrayOf(0)
-    override val maxOffset: Int = 0
+        if (declaration.name == Name.identifier("save")) {
+            log(result.dump())
+        }
+        return result
+    }
+
+    private fun callTodoFunction(declaration: IrFunction): IrBlockBody {
+        val errorFunction =
+            pluginContext.referenceFunctions(CallableId(FqName("kotlin"), Name.identifier("TODO")))
+                .firstOrNull { it.owner.valueParameters.size == 1 }
+                ?: error("Could not find kotlin.error(String)")
+
+        return irBuilder(declaration.symbol).irBlockBody {
+            +irReturn(
+                irCall(
+                    callee = errorFunction,
+                ).apply {
+                    putValueArgument(0, irString("The method is not implemented =("))
+                }
+            )
+        }
+    }
+
+    private inline fun <reified K : CoroutineFriendlyKey> IrDeclarationOrigin.getPluginKey(): K? {
+        val generatedByPlugin = this as? IrDeclarationOrigin.GeneratedByPlugin ?: return null
+        return generatedByPlugin.pluginKey as K
+    }
+
+    private fun IrPluginContext.findClassSymbol(classId: ClassId): IrClassSymbol =
+        referenceClass(classId) ?: error("Class '${classId}' not found")
+
+    private fun irBuilder(symbol: IrSymbol): DeclarationIrBuilder =
+        DeclarationIrBuilder(pluginContext, symbol, symbol.owner.startOffset, symbol.owner.endOffset)
+
+    private fun IrSimpleFunction.addExtensionReceiver(type: IrType, name: Name): IrValueParameter =
+        IrValueParameterBuilder().run {
+            this.type = type
+            this.origin = IrDeclarationOrigin.DEFINED
+            this.name = name
+            factory.buildValueParameter(this, this@addExtensionReceiver).also { receiver ->
+                extensionReceiverParameter = receiver
+            }
+        }
 }
