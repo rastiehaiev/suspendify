@@ -8,7 +8,6 @@ import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.fir.extensions.FirExtensionRegistrarAdapter
 
-@Suppress("Unused")
 @OptIn(ExperimentalCompilerApi::class)
 class SuspendifyCompilerPlugin : CompilerPluginRegistrar() {
     override val supportsK2: Boolean = true

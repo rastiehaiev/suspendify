@@ -7,21 +7,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
-@IrDump
 fun main() = runBlocking {
-    val repository = Repository("Hello world!")
-    println(repository.find())
+    val repository = Repository()
 
     val suspendifiedRepository = repository.suspendify(Dispatchers.IO)
-    println(suspendifiedRepository)
-    suspendifiedRepository.save("Hey you")
-    println(suspendifiedRepository.find())
+    suspendifiedRepository.save("message")
+
+    Unit
 }
 
 @IrDump
 @Suspendify
-class Repository(private val value: String) {
-    fun find(): String = value
+class Repository {
+    fun find(): String = "Hello world!"
 
     fun save(value: String) {
         println("Saving $value")
