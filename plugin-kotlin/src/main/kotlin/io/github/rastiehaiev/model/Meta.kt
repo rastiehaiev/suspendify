@@ -4,7 +4,7 @@ import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 
-class Meta {
+object Meta {
     object OriginalClass {
         val factoryMethodName = Name.identifier("suspendify")
     }

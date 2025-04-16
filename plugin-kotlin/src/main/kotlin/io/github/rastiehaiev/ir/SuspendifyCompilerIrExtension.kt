@@ -1,7 +1,7 @@
 package io.github.rastiehaiev.ir
 
-import io.github.rastiehaiev.log
 import io.github.rastiehaiev.model.DeclarationKey
+import io.github.rastiehaiev.model.Meta
 import org.jetbrains.kotlin.backend.common.extensions.IrGenerationExtension
 import org.jetbrains.kotlin.backend.common.extensions.IrPluginContext
 import org.jetbrains.kotlin.backend.common.lower.DeclarationIrBuilder
@@ -39,7 +39,6 @@ import org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrInstanceInitializerCallImpl
 import org.jetbrains.kotlin.ir.expressions.impl.fromSymbolOwner
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
-import org.jetbrains.kotlin.ir.symbols.IrFunctionSymbol
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.symbols.IrSymbol
 import org.jetbrains.kotlin.ir.types.IrType
@@ -71,17 +70,21 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
         packageFqName = FqName("kotlin.coroutines"),
         topLevelName = Name.identifier("SuspendFunction1"),
     )
-    private val coroutineDispatcherClassId = ClassId(
-        packageFqName = FqName("kotlinx.coroutines"),
-        topLevelName = Name.identifier("CoroutineDispatcher"),
-    )
     private val coroutineScopeClassId = ClassId(
         packageFqName = FqName("kotlinx.coroutines"),
         topLevelName = Name.identifier("CoroutineScope"),
     )
-    private val withContextClassId = CallableId(
+    private val extensionFunctionTypeClassId = ClassId(
+        packageFqName = FqName("kotlin"),
+        topLevelName = Name.identifier("ExtensionFunctionType")
+    )
+    private val withContextCallableId = CallableId(
         packageName = FqName("kotlinx.coroutines"),
         callableName = Name.identifier("withContext"),
+    )
+    private val todoFunctionCallableId = CallableId(
+        packageName = FqName("kotlin"),
+        callableName = Name.identifier("TODO"),
     )
 
     override fun visitConstructor(declaration: IrConstructor): IrStatement {
@@ -98,24 +101,22 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
             )
         }
 
+        val valueParameters = with(Meta.SuspendifiedClass) {
+            listOf(
+                dispatcherParameter.name to dispatcherParameter.type.toIrType(),
+                delegateParameterName to pluginKey.originalClassId.toIrType()
+            )
+        }
+
         val nestedStubClass = declaration.parentAsClass
-
-        val coroutineDispatcherType = pluginContext.findClassSymbol(coroutineDispatcherClassId).defaultType
-        val delegateType = pluginContext.findClassSymbol(pluginKey.originalClassId).defaultType
-
-        val valueParameters = listOf(
-            "delegate" to delegateType,
-            "dispatcher" to coroutineDispatcherType,
-        )
-
         val propertiesData = valueParameters.map { (valueParamName, valueParamType) ->
-            val valueParameter = declaration.valueParameters.first { it.name == Name.identifier(valueParamName) }
+            val valueParameter = declaration.valueParameters.first { it.name == valueParamName }
             Triple(valueParamName, valueParamType, valueParameter)
         }
 
         propertiesData.forEach { (propertyName, propertyType, valueParameter) ->
             val property = nestedStubClass.addProperty {
-                name = Name.identifier(propertyName)
+                name = propertyName
                 visibility = DescriptorVisibilities.PRIVATE
             }
 
@@ -137,38 +138,14 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
                 visibility = DescriptorVisibilities.PRIVATE
             }
         }
-
         return super.visitConstructor(declaration)
     }
-
-    private fun IrProperty.addDefaultGetter(
-        parentClass: IrClass,
-        builtIns: IrBuiltIns,
-        configure: IrSimpleFunction.() -> Unit,
-    ) {
-        addDefaultGetter(parentClass, builtIns)
-
-        getterOrFail.apply {
-            dispatchReceiverParameter!!.origin = IrDeclarationOrigin.DEFINED
-            configure()
-        }
-    }
-
-    private val IrProperty.getterOrFail: IrSimpleFunction
-        get() {
-            return getter ?: error("'getter' should be present, but was null: ${dump()}")
-        }
 
     override fun visitFunction(declaration: IrFunction): IrStatement {
         when (val pluginKey = declaration.origin.getPluginKey<DeclarationKey>()) {
             is DeclarationKey.SuspendifiedClassFunction -> {
-                declaration.body = try {
-                    pluginKey.createSuspendFunctionBlockBody(declaration)
-                } catch (t: Throwable) {
-                    null
-                } ?: callTodoFunction(declaration)
-
-                log("Parent:\n${declaration.parent.dump()}")
+                declaration.body = pluginKey.createSuspendFunctionBlockBody(declaration)
+                    ?: callTodoFunction(declaration)
             }
 
             is DeclarationKey.OriginalClassConvertMethod -> {
@@ -207,53 +184,20 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
     private fun DeclarationKey.SuspendifiedClassFunction.createSuspendFunctionBlockBody(
         declaration: IrFunction,
     ): IrBlockBody? {
-        val nestedClassSymbol: IrClassSymbol = pluginContext.findClassSymbol(suspendifiedClassId)
-        val originalClassSymbol: IrClassSymbol = pluginContext.findClassSymbol(originalClassId)
-        val declarationClass = declaration.parent as IrClass
-
-        val withContextFunction: IrFunctionSymbol = pluginContext.referenceFunctions(withContextClassId)
-            .firstOrNull { it.owner.valueParameters.size == 2 }
-            ?: error("Expected function withContext")
-
-        val delegateGetterSymbol: IrSimpleFunctionSymbol = nestedClassSymbol.getPropertyGetter("delegate")
-            ?: error("Delegate not found")
-
-        val dispatcherGetterSymbol = nestedClassSymbol.getPropertyGetter("dispatcher") ?: error("Dispatcher not found")
-
-        val originalFunction: IrSimpleFunction = originalClassSymbol.owner.functions
-            .filter { it.name == declaration.name }
-            .firstOrNull { func ->
-                val originalFuncParameters = func.valueParameters
-                val generatedFuncParameters = declaration.valueParameters
-                val orTypes = originalFuncParameters.map { it.name to it.type }
-                val geTypes = generatedFuncParameters.map { it.name to it.type }
-                originalFuncParameters.size == generatedFuncParameters.size && orTypes == geTypes
-            } ?: run {
-            return null
+        val (delegateGetterSymbol, dispatcherGetterSymbol) = with(Meta.SuspendifiedClass) {
+            with(pluginContext.findClassSymbol(suspendifiedClassId)) {
+                Pair(
+                    getPropertyGetterOrError(delegateParameterName.asString()),
+                    getPropertyGetterOrError(dispatcherParameter.name.asString())
+                )
+            }
         }
 
-        // SuspendFunction1<CoroutineScope, T>
+        val thisReceiver = declaration.dispatchReceiverParameter ?: error("Expected dispatch receiver param!")
+        val declarationClass = declaration.parent as IrClass
+        val originalClassSymbol = pluginContext.findClassSymbol(originalClassId)
+        val originalFunction = originalClassSymbol.findMatchingFunction(declaration) ?: return null
         val coroutineScopeType = pluginContext.findClassSymbol(coroutineScopeClassId).defaultType
-        val coroutineDispatcherType = pluginContext.findClassSymbol(coroutineDispatcherClassId).defaultType
-
-        val a1 = pluginContext.findClassSymbol(
-            ClassId(
-                packageFqName = FqName("kotlin"),
-                topLevelName = Name.identifier("ExtensionFunctionType")
-            )
-        )
-        val a2 = a1.constructors.first()
-
-        val extensionAnnotation = IrConstructorCallImpl.fromSymbolOwner(
-            startOffset = 0,
-            endOffset = 0,
-            type = a1.defaultType,
-            constructorSymbol = a2,
-        )
-
-        val lambdaType = pluginContext.findClassSymbol(suspendFunction1ClassId)
-            .typeWith(coroutineScopeType, declaration.returnType)
-            .addAnnotations(newAnnotations = listOf(extensionAnnotation))
 
         val functionLambda = declaration.factory.buildFun {
             origin = IrDeclarationOrigin.LOCAL_FUNCTION_FOR_LAMBDA
@@ -272,11 +216,10 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
                     ).apply {
                         dispatchReceiver = irCall(delegateGetterSymbol).apply {
                             origin = IrStatementOrigin.GET_PROPERTY
-                            dispatchReceiver =
-                                irGet(declaration.dispatchReceiverParameter!!, type = declarationClass.defaultType)
+                            dispatchReceiver = irGet(thisReceiver, type = declarationClass.defaultType)
                         }
 
-                        declaration.valueParameters.forEachIndexed { index, param: IrValueParameter ->
+                        declaration.valueParameters.forEachIndexed { index, param ->
                             putValueArgument(index, irGet(param))
                         }
                     }
@@ -288,24 +231,28 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
         val lambda = IrFunctionExpressionImpl(
             startOffset = UNDEFINED_OFFSET,
             endOffset = UNDEFINED_OFFSET,
-            type = lambdaType,
+            // SuspendFunction1<CoroutineScope, T>
+            type = suspendFunction1Type(parameterizedWith = listOf(coroutineScopeType, declaration.returnType)),
             origin = IrStatementOrigin.LAMBDA,
             function = functionLambda,
         )
 
-        val result = irBuilder(declaration.symbol).irBlockBody {
+        val coroutineDispatcherType = Meta.SuspendifiedClass.dispatcherParameter.type.toIrType()
+        val withContextFunction = pluginContext.referenceFunctions(withContextCallableId)
+            .firstOrNull { it.owner.valueParameters.size == 2 }
+            ?: error("Expected function withContext")
+        return irBuilder(declaration.symbol).irBlockBody {
             val call = irCall(
                 callee = withContextFunction,
                 type = declaration.returnType,
             ).apply {
                 putTypeArgument(0, declaration.returnType)
 
-                val valueArgument = irCall(dispatcherGetterSymbol, type = coroutineDispatcherType).apply {
+                val dispatcherArgument = irCall(dispatcherGetterSymbol, type = coroutineDispatcherType).apply {
                     origin = IrStatementOrigin.GET_PROPERTY
-                    dispatchReceiver =
-                        irGet(declaration.dispatchReceiverParameter!!, type = declarationClass.defaultType)
+                    dispatchReceiver = irGet(thisReceiver, type = declarationClass.defaultType)
                 }
-                putValueArgument(0, valueArgument)
+                putValueArgument(0, dispatcherArgument)
                 putValueArgument(1, lambda)
             }
             if (declaration.returnType == context.irBuiltIns.unitType) {
@@ -314,12 +261,11 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
                 +irReturn(call)
             }
         }
-        return result
     }
 
     private fun callTodoFunction(declaration: IrFunction): IrBlockBody {
         val errorFunction =
-            pluginContext.referenceFunctions(CallableId(FqName("kotlin"), Name.identifier("TODO")))
+            pluginContext.referenceFunctions(todoFunctionCallableId)
                 .firstOrNull { it.owner.valueParameters.size == 1 }
                 ?: error("Could not find kotlin.error(String)")
 
@@ -334,6 +280,19 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
         }
     }
 
+    private fun IrProperty.addDefaultGetter(
+        parentClass: IrClass,
+        builtIns: IrBuiltIns,
+        configure: IrSimpleFunction.() -> Unit,
+    ) {
+        addDefaultGetter(parentClass, builtIns)
+
+        getterOrFail.apply {
+            dispatchReceiverParameter!!.origin = IrDeclarationOrigin.DEFINED
+            configure()
+        }
+    }
+
     private inline fun <reified K : DeclarationKey> IrDeclarationOrigin.getPluginKey(): K? {
         val generatedByPlugin = this as? IrDeclarationOrigin.GeneratedByPlugin ?: return null
         return generatedByPlugin.pluginKey as K
@@ -341,6 +300,9 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
 
     private fun IrPluginContext.findClassSymbol(classId: ClassId): IrClassSymbol =
         referenceClass(classId) ?: error("Class '${classId}' not found")
+
+    private fun ClassId.toIrType(): IrType =
+        pluginContext.findClassSymbol(this).defaultType
 
     private fun irBuilder(symbol: IrSymbol): DeclarationIrBuilder =
         DeclarationIrBuilder(pluginContext, symbol, symbol.owner.startOffset, symbol.owner.endOffset)
@@ -354,4 +316,34 @@ private class SuspendifyTransformer(private val pluginContext: IrPluginContext) 
                 extensionReceiverParameter = receiver
             }
         }
+
+    private val IrProperty.getterOrFail: IrSimpleFunction
+        get() = getter ?: error("'getter' should be present, but was null:\n${dump()}")
+
+    private fun IrClassSymbol.getPropertyGetterOrError(name: String): IrSimpleFunctionSymbol =
+        this.getPropertyGetter(name) ?: error("Getter for property '$name' not found.")
+
+    private fun suspendFunction1Type(parameterizedWith: List<IrType>): IrType {
+        val extensionAnnotationSymbol = pluginContext.findClassSymbol(extensionFunctionTypeClassId)
+        val extensionAnnotationConstructor = extensionAnnotationSymbol.constructors.first()
+
+        val extensionAnnotation = IrConstructorCallImpl.fromSymbolOwner(
+            startOffset = 0,
+            endOffset = 0,
+            type = extensionAnnotationSymbol.defaultType,
+            constructorSymbol = extensionAnnotationConstructor,
+        )
+        return pluginContext.findClassSymbol(suspendFunction1ClassId)
+            .typeWith(parameterizedWith)
+            .addAnnotations(newAnnotations = listOf(extensionAnnotation))
+    }
+
+    private fun IrClassSymbol.findMatchingFunction(declaration: IrFunction): IrSimpleFunction? =
+        owner.functions
+            .filter { it.name == declaration.name }
+            .firstOrNull { func ->
+                val originalParameters = func.valueParameters
+                val generatedParameters = declaration.valueParameters
+                originalParameters.map { it.name to it.type } == generatedParameters.map { it.name to it.type }
+            }
 }
