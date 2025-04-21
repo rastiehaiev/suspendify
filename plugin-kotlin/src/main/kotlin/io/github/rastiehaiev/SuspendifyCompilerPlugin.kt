@@ -15,8 +15,8 @@ class SuspendifyCompilerPlugin : CompilerPluginRegistrar() {
     override fun ExtensionStorage.registerExtensions(configuration: CompilerConfiguration) {
         val configurationKeys = configuration.toKeys()
         if (configurationKeys.enabled) {
-            FirExtensionRegistrarAdapter.registerExtension(SuspendifyFirExtensionRegistrar())
-            IrGenerationExtension.registerExtension(SuspendifyCompilerIrExtension())
+            FirExtensionRegistrarAdapter.registerExtension(SuspendifyFirExtensionRegistrar(configuration))
+            IrGenerationExtension.registerExtension(SuspendifyCompilerIrExtension(configuration))
         }
     }
 }

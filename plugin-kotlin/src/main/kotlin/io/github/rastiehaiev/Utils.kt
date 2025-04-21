@@ -1,10 +1,18 @@
 package io.github.rastiehaiev
 
-import java.io.File
-import java.nio.file.Files
+import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity
+import org.jetbrains.kotlin.cli.common.messages.MessageCollector
+import org.jetbrains.kotlin.config.CommonConfigurationKeys
+import org.jetbrains.kotlin.config.CompilerConfiguration
 
-fun log(message: String) {
-    File("/Users/roman/dev/project/personal/suspendify").resolve("output.txt")
-        .also { if (!it.exists()) Files.createFile(it.toPath()) }
-        .appendText("$message\n----------------------------\n")
+fun CompilerConfiguration.getLogger(): MessageCollector {
+    return get(CommonConfigurationKeys.MESSAGE_COLLECTOR_KEY, MessageCollector.NONE)
+}
+
+fun MessageCollector.warn(message: String) {
+    report(CompilerMessageSeverity.WARNING, message)
+}
+
+fun MessageCollector.error(message: String) {
+    report(CompilerMessageSeverity.ERROR, message)
 }

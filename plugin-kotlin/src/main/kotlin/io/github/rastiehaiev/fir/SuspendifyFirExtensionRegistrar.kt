@@ -1,9 +1,14 @@
 package io.github.rastiehaiev.fir
 
+import io.github.rastiehaiev.error
+import io.github.rastiehaiev.getLogger
 import io.github.rastiehaiev.model.DeclarationKey
 import io.github.rastiehaiev.model.Function
 import io.github.rastiehaiev.model.Meta
 import io.github.rastiehaiev.model.Parameter
+import io.github.rastiehaiev.warn
+import org.jetbrains.kotlin.cli.common.messages.MessageCollector
+import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.descriptors.Modality
 import org.jetbrains.kotlin.descriptors.Visibilities
 import org.jetbrains.kotlin.fir.FirSession
@@ -37,20 +42,19 @@ import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.name.SpecialNames
 
-class SuspendifyFirExtensionRegistrar : FirExtensionRegistrar() {
+class SuspendifyFirExtensionRegistrar(configuration: CompilerConfiguration) : FirExtensionRegistrar() {
+    private val logger = configuration.getLogger()
+
     override fun ExtensionRegistrarContext.configurePlugin() {
-        +::SuspendifyDeclarationGenerationExtension
+        +{ it: FirSession -> SuspendifyDeclarationGenerationExtension(it, logger) }
     }
 }
 
 private class SuspendifyDeclarationGenerationExtension(
     session: FirSession,
+    private val logger: MessageCollector,
 ) : FirDeclarationGenerationExtension(session) {
-    private val markAnnotationFqdn: FqName =
-        ClassId(
-            packageFqName = FqName("io.github.rastiehaiev"),
-            topLevelName = Name.identifier("Suspendify"),
-        ).asSingleFqName()
+    private val markAnnotationFqdn: FqName = Meta.ClassIds.Suspendify.asSingleFqName()
 
     override fun FirDeclarationPredicateRegistrar.registerPredicates() {
         register(DeclarationPredicate.create { annotated(markAnnotationFqdn) })
@@ -72,23 +76,28 @@ private class SuspendifyDeclarationGenerationExtension(
     ): FirClassLikeSymbol<*>? {
         val declarationKey = owner.getDeclarationKey<DeclarationKey.OriginalClass>()
         return if (declarationKey != null && name == Meta.SuspendifiedClass.name) {
-            createNestedClassStub(owner, name).symbol
+            createNestedClassStub(owner, name)?.symbol
         } else {
             super.generateNestedClassLikeDeclaration(owner, name, context)
         }
     }
 
     @OptIn(SymbolInternals::class)
-    private fun createNestedClassStub(owner: FirClassSymbol<*>, name: Name): FirRegularClass {
+    private fun createNestedClassStub(owner: FirClassSymbol<*>, name: Name): FirRegularClass? {
         val functions = owner.fir.declarations
             .filterIsInstance<FirSimpleFunction>()
             .map { function -> function.toMetaFunction() }
             .associateBy { it.name }
 
-        val key = DeclarationKey.SuspendifiedClass(owner, functions)
-        return createNestedClass(owner, name, key) {
-            visibility = Visibilities.Public
-            modality = Modality.FINAL
+        return if (functions.isNotEmpty()) {
+            val key = DeclarationKey.SuspendifiedClass(owner, functions)
+            createNestedClass(owner, name, key) {
+                visibility = Visibilities.Public
+                modality = Modality.FINAL
+            }
+        } else {
+            logger.warn("Class '${owner.name}' has no methods. '${Meta.SuspendifiedClass.name}' nested class won't be created.")
+            null
         }
     }
 
@@ -148,7 +157,10 @@ private class SuspendifyDeclarationGenerationExtension(
         val suspendifiedClass = findClassSymbols(Meta.SuspendifiedClass.name)
             .takeIf { it.size == 1 }
             ?.first()
-            ?: return emptyList()
+            ?: run {
+                logger.warn("Single class with name '${Meta.SuspendifiedClass.name}' not found in original class '${originalClass.name}'.")
+                return emptyList()
+            }
 
 
         val suspendifyFunction = createMemberFunction(
@@ -157,13 +169,14 @@ private class SuspendifyDeclarationGenerationExtension(
             name = callableId.callableName,
             returnType = suspendifiedClass.defaultType(),
         ) {
-            with(Meta.SuspendifiedClass) {
-                valueParameter(
-                    name = dispatcherParameter.name,
-                    type = dispatcherParameter.type.findFirClassSymbol().defaultType(),
-                    // should be Dispatchers.IO
-                    hasDefaultValue = false,
-                )
+            with(Meta.OriginalClass) {
+                factoryMethodParameters.forEach { parameter ->
+                    valueParameter(
+                        name = parameter.name,
+                        type = parameter.type.findFirClassSymbol().defaultType(),
+                        hasDefaultValue = parameter.hasDefaultValue,
+                    )
+                }
             }
         }
         return listOf(suspendifyFunction.symbol)
@@ -200,8 +213,13 @@ private class SuspendifyDeclarationGenerationExtension(
     }
 
     private inline fun <reified K : DeclarationKey> FirClassSymbol<*>.getDeclarationKey(): K? =
-        if (isSuspendifyAnnotated() && isClass) {
-            DeclarationKey.OriginalClass
+        if (isAnnotatedWith(markAnnotationFqdn)) {
+            if (isClass) {
+                DeclarationKey.OriginalClass
+            } else {
+                logger.error("Only classes can be annotated with '${markAnnotationFqdn}'!")
+                null
+            }
         } else {
             (origin as? FirDeclarationOrigin.Plugin)?.key
         }.let {
@@ -216,10 +234,10 @@ private class SuspendifyDeclarationGenerationExtension(
     private fun ClassId.findFirClassSymbol(): FirClassSymbol<*> =
         session.symbolProvider.getClassLikeSymbolByClassId(this)
             as? FirClassSymbol<*>
-            ?: error("Could not find class by ID=$this.")
+            ?: error("Could not find class by ID='$this'.")
 
-    private fun FirClassSymbol<*>.isSuspendifyAnnotated() =
-        annotations.any { annotation -> annotation.fqName(session) == markAnnotationFqdn }
+    private fun FirClassSymbol<*>.isAnnotatedWith(fqName: FqName): Boolean =
+        annotations.any { annotation -> annotation.fqName(session) == fqName }
 
     private fun FirSimpleFunction.toMetaFunction(): Function =
         Function(
