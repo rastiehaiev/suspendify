@@ -1,20 +1,22 @@
 package io.github.rastiehaiev
 
+import io.github.rastiehaiev.repository.CompanyRepository
+import io.github.rastiehaiev.repository.UserRepository
+import io.github.rastiehaiev.repository.PositionRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 
-fun main() = runBlocking {
-    val repository = Repository()
-    val suspendifiedRepository = repository.suspendify(with = Dispatchers.IO)
-    suspendifiedRepository.save("message")
-}
+fun main() {
+    runBlocking {
+        val userRepository = UserRepository()
+        val userRepositorySuspendified = userRepository.suspendify(Dispatchers.IO)
+        println(userRepositorySuspendified)
 
-@IrDump
-@Suspendify
-class Repository {
-    fun find(): String = "Hello world!"
+        println(userRepositorySuspendified.findById("1"))
 
-    fun save(value: String) {
-        println("Saving $value")
+        val companyRepository = CompanyRepository()
+        val positionRepository = PositionRepository()
+        val positionRepositorySuspendified = positionRepository.suspendify(Dispatchers.IO)
+        println(positionRepositorySuspendified)
     }
 }

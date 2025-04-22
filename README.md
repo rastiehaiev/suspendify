@@ -16,7 +16,7 @@ Remember to add a Kotlin coroutines library as well:
 ```kotlin
 plugins {
     kotlin("jvm") version "2.1.20"
-    id("io.github.rastiehaiev.suspendify") version "0.0.2"
+    id("io.github.rastiehaiev.suspendify") version "0.0.4"
 }
 
 repositories {
@@ -25,7 +25,7 @@ repositories {
 }
 
 dependencies {
-    implementation("io.github.rastiehaiev:suspendify-core:0.0.2")
+    implementation("io.github.rastiehaiev:suspendify-core:0.0.4")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
 }
 

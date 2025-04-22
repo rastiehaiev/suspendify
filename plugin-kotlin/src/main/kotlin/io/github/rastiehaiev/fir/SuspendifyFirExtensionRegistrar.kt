@@ -17,6 +17,8 @@ import org.jetbrains.kotlin.fir.declarations.FirDeclarationOrigin
 import org.jetbrains.kotlin.fir.declarations.FirRegularClass
 import org.jetbrains.kotlin.fir.declarations.FirSimpleFunction
 import org.jetbrains.kotlin.fir.declarations.utils.isClass
+import org.jetbrains.kotlin.fir.declarations.utils.isSuspend
+import org.jetbrains.kotlin.fir.declarations.utils.visibility
 import org.jetbrains.kotlin.fir.extensions.FirDeclarationGenerationExtension
 import org.jetbrains.kotlin.fir.extensions.FirDeclarationPredicateRegistrar
 import org.jetbrains.kotlin.fir.extensions.FirExtensionRegistrar
@@ -88,6 +90,8 @@ private class SuspendifyDeclarationGenerationExtension(
     private fun createNestedClassStub(owner: FirClassSymbol<*>, name: Name): FirRegularClass? {
         val functions = owner.fir.declarations
             .filterIsInstance<FirSimpleFunction>()
+            .filterIsNotSuspended(owner)
+            .filter { it.visibility == Visibilities.Public }
             .mapNotNull { function -> function.toMetaFunction(owner.classId) }
             .associateBy { it.name }
 
@@ -244,7 +248,7 @@ private class SuspendifyDeclarationGenerationExtension(
         if (functionReturnType == null) {
             logger.warn(
                 "The function '$name' of class `${classId.asString()}` won't be created " +
-                    "as unable to determine its return type. " +
+                    "as unable to determine its return type (FIR type ref: '${returnTypeRef::class.simpleName}'). " +
                     "Please, consider specifying the return type explicitly.)"
             )
         }
@@ -262,4 +266,14 @@ private class SuspendifyDeclarationGenerationExtension(
             )
         }
     }
+
+    private fun Iterable<FirSimpleFunction>.filterIsNotSuspended(owner: FirClassSymbol<*>) =
+        filter {
+            if (it.isSuspend) {
+                logger.warn("Function '${it.name}' of class '${owner.classId.asString()}' is already suspend.")
+                false
+            } else {
+                true
+            }
+        }
 }
