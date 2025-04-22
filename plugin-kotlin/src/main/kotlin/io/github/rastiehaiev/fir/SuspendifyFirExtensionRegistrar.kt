@@ -2,6 +2,7 @@ package io.github.rastiehaiev.fir
 
 import io.github.rastiehaiev.error
 import io.github.rastiehaiev.getLogger
+import io.github.rastiehaiev.info
 import io.github.rastiehaiev.model.DeclarationKey
 import io.github.rastiehaiev.model.Function
 import io.github.rastiehaiev.model.Meta
@@ -36,6 +37,7 @@ import org.jetbrains.kotlin.fir.symbols.impl.FirClassifierSymbol
 import org.jetbrains.kotlin.fir.symbols.impl.FirConstructorSymbol
 import org.jetbrains.kotlin.fir.symbols.impl.FirNamedFunctionSymbol
 import org.jetbrains.kotlin.fir.types.coneType
+import org.jetbrains.kotlin.fir.types.coneTypeOrNull
 import org.jetbrains.kotlin.name.CallableId
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
@@ -86,17 +88,18 @@ private class SuspendifyDeclarationGenerationExtension(
     private fun createNestedClassStub(owner: FirClassSymbol<*>, name: Name): FirRegularClass? {
         val functions = owner.fir.declarations
             .filterIsInstance<FirSimpleFunction>()
-            .map { function -> function.toMetaFunction() }
+            .mapNotNull { function -> function.toMetaFunction(owner.classId) }
             .associateBy { it.name }
 
         return if (functions.isNotEmpty()) {
             val key = DeclarationKey.SuspendifiedClass(owner, functions)
+            logger.info("Creating nested class '$name' for '${owner.classId.asString()}'.")
             createNestedClass(owner, name, key) {
                 visibility = Visibilities.Public
                 modality = Modality.FINAL
             }
         } else {
-            logger.warn("Class '${owner.name}' has no methods. '${Meta.SuspendifiedClass.name}' nested class won't be created.")
+            logger.warn("Class '${owner.name}' has no methods to suspendify. '${Meta.SuspendifiedClass.name}' nested class won't be created.")
             null
         }
     }
@@ -147,6 +150,7 @@ private class SuspendifyDeclarationGenerationExtension(
             }
             status { isSuspend = true }
         }
+        logger.info("Creating suspended function '${callableId.callableName}' in '${suspendifiedClass.classId.asString()}'.")
         return listOf(suspendedFunction.symbol)
     }
 
@@ -157,11 +161,7 @@ private class SuspendifyDeclarationGenerationExtension(
         val suspendifiedClass = findClassSymbols(Meta.SuspendifiedClass.name)
             .takeIf { it.size == 1 }
             ?.first()
-            ?: run {
-                logger.warn("Single class with name '${Meta.SuspendifiedClass.name}' not found in original class '${originalClass.name}'.")
-                return emptyList()
-            }
-
+            ?: return emptyList()
 
         val suspendifyFunction = createMemberFunction(
             owner = originalClass,
@@ -239,15 +239,27 @@ private class SuspendifyDeclarationGenerationExtension(
     private fun FirClassSymbol<*>.isAnnotatedWith(fqName: FqName): Boolean =
         annotations.any { annotation -> annotation.fqName(session) == fqName }
 
-    private fun FirSimpleFunction.toMetaFunction(): Function =
-        Function(
-            name = name,
-            returnType = returnTypeRef.coneType,
-            parameters = valueParameters.map { parameter ->
-                Parameter(
-                    name = parameter.name,
-                    type = parameter.returnTypeRef.coneType,
-                )
-            }
-        )
+    private fun FirSimpleFunction.toMetaFunction(classId: ClassId): Function? {
+        val functionReturnType = returnTypeRef.coneTypeOrNull
+        if (functionReturnType == null) {
+            logger.warn(
+                "The function '$name' of class `${classId.asString()}` won't be created " +
+                    "as unable to determine its return type. " +
+                    "Please, consider specifying the return type explicitly.)"
+            )
+        }
+
+        return functionReturnType?.let {
+            Function(
+                name = name,
+                returnType = functionReturnType,
+                parameters = valueParameters.map { parameter ->
+                    Parameter(
+                        name = parameter.name,
+                        type = parameter.returnTypeRef.coneType,
+                    )
+                }
+            )
+        }
+    }
 }

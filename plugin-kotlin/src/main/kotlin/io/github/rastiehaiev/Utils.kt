@@ -16,3 +16,7 @@ fun MessageCollector.warn(message: String) {
 fun MessageCollector.error(message: String) {
     report(CompilerMessageSeverity.ERROR, message)
 }
+
+fun MessageCollector.info(message: String) {
+    report(CompilerMessageSeverity.INFO, message)
+}
