@@ -31,7 +31,7 @@ kotlin {
 }
 
 irDump {
-    enabled = true
+    enabled = false
 }
 
 suspendify {

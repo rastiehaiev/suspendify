@@ -18,7 +18,6 @@ import org.jetbrains.kotlin.fir.declarations.FirRegularClass
 import org.jetbrains.kotlin.fir.declarations.FirSimpleFunction
 import org.jetbrains.kotlin.fir.declarations.utils.isClass
 import org.jetbrains.kotlin.fir.declarations.utils.isSuspend
-import org.jetbrains.kotlin.fir.declarations.utils.visibility
 import org.jetbrains.kotlin.fir.extensions.FirDeclarationGenerationExtension
 import org.jetbrains.kotlin.fir.extensions.FirDeclarationPredicateRegistrar
 import org.jetbrains.kotlin.fir.extensions.FirExtensionRegistrar
@@ -39,7 +38,6 @@ import org.jetbrains.kotlin.fir.symbols.impl.FirClassifierSymbol
 import org.jetbrains.kotlin.fir.symbols.impl.FirConstructorSymbol
 import org.jetbrains.kotlin.fir.symbols.impl.FirNamedFunctionSymbol
 import org.jetbrains.kotlin.fir.types.coneType
-import org.jetbrains.kotlin.fir.types.coneTypeOrNull
 import org.jetbrains.kotlin.name.CallableId
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
@@ -91,7 +89,6 @@ private class SuspendifyDeclarationGenerationExtension(
         val functions = owner.fir.declarations
             .filterIsInstance<FirSimpleFunction>()
             .filterIsNotSuspended(owner)
-            .filter { it.visibility == Visibilities.Public }
             .mapNotNull { function -> function.toMetaFunction(owner.classId) }
             .associateBy { it.name }
 
@@ -244,13 +241,16 @@ private class SuspendifyDeclarationGenerationExtension(
         annotations.any { annotation -> annotation.fqName(session) == fqName }
 
     private fun FirSimpleFunction.toMetaFunction(classId: ClassId): Function? {
-        val functionReturnType = returnTypeRef.coneTypeOrNull
-        if (functionReturnType == null) {
+        val functionReturnType = try {
+            this.symbol.resolvedReturnType
+        } catch (e: Exception) {
+            logger.warn("Failed to resolve function return type. Reason: ${e.message}.")
             logger.warn(
                 "The function '$name' of class `${classId.asString()}` won't be created " +
                     "as unable to determine its return type (FIR type ref: '${returnTypeRef::class.simpleName}'). " +
                     "Please, consider specifying the return type explicitly.)"
             )
+            null
         }
 
         return functionReturnType?.let {
