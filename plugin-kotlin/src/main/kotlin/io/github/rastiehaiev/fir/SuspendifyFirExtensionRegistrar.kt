@@ -16,6 +16,7 @@ import org.jetbrains.kotlin.fir.FirSession
 import org.jetbrains.kotlin.fir.declarations.FirDeclarationOrigin
 import org.jetbrains.kotlin.fir.declarations.FirRegularClass
 import org.jetbrains.kotlin.fir.declarations.FirSimpleFunction
+import org.jetbrains.kotlin.fir.declarations.FirValueParameter
 import org.jetbrains.kotlin.fir.declarations.utils.isClass
 import org.jetbrains.kotlin.fir.declarations.utils.isSuspend
 import org.jetbrains.kotlin.fir.extensions.FirDeclarationGenerationExtension
@@ -37,7 +38,7 @@ import org.jetbrains.kotlin.fir.symbols.impl.FirClassSymbol
 import org.jetbrains.kotlin.fir.symbols.impl.FirClassifierSymbol
 import org.jetbrains.kotlin.fir.symbols.impl.FirConstructorSymbol
 import org.jetbrains.kotlin.fir.symbols.impl.FirNamedFunctionSymbol
-import org.jetbrains.kotlin.fir.types.coneType
+import org.jetbrains.kotlin.fir.types.coneTypeOrNull
 import org.jetbrains.kotlin.name.CallableId
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
@@ -87,10 +88,14 @@ private class SuspendifyDeclarationGenerationExtension(
     @OptIn(SymbolInternals::class)
     private fun createNestedClassStub(owner: FirClassSymbol<*>, name: Name): FirRegularClass? {
         val functions = owner.fir.declarations
+            .asSequence()
             .filterIsInstance<FirSimpleFunction>()
-            .filterIsNotSuspended(owner)
-            .mapNotNull { function -> function.toMetaFunction(owner.classId) }
-            .associateBy { it.name }
+            .onEach {
+                if (it.isSuspend) logger.warn("Function '${it.name}' of class '${owner.classId.asString()}' is already suspend.")
+            }
+            .filter { !it.isSuspend }
+            .mapNotNull { it.toFunction(owner.classId) }
+            .groupBy { it.name }
 
         return if (functions.isNotEmpty()) {
             val key = DeclarationKey.SuspendifiedClass(owner, functions)
@@ -135,24 +140,25 @@ private class SuspendifyDeclarationGenerationExtension(
         callableId: CallableId,
         suspendifiedClass: FirClassSymbol<*>,
     ): List<FirNamedFunctionSymbol> {
-        val function = functions[callableId.callableName] ?: return emptyList()
-        val key = DeclarationKey.SuspendifiedClassFunction(
-            originalClassId = originalClass.classId,
-            suspendifiedClassId = suspendifiedClass.classId,
-        )
-        val suspendedFunction = createMemberFunction(
-            owner = suspendifiedClass,
-            key = key,
-            name = callableId.callableName,
-            returnType = function.returnType,
-        ) {
-            function.parameters.forEach { parameter ->
-                with(parameter) { valueParameter(name, type) }
+        val functions = functions[callableId.callableName] ?: return emptyList()
+        logger.warn("Creating suspended function(s) '${callableId.callableName}' in '${suspendifiedClass.classId.asString()}'.")
+        return functions.map { function ->
+            val key = DeclarationKey.SuspendifiedClassFunction(
+                originalClassId = originalClass.classId,
+                suspendifiedClassId = suspendifiedClass.classId,
+            )
+            createMemberFunction(
+                owner = suspendifiedClass,
+                key = key,
+                name = callableId.callableName,
+                returnType = function.returnType,
+            ) {
+                function.parameters.forEach { parameter ->
+                    with(parameter) { valueParameter(name, type) }
+                }
+                status { isSuspend = true }
             }
-            status { isSuspend = true }
-        }
-        logger.info("Creating suspended function '${callableId.callableName}' in '${suspendifiedClass.classId.asString()}'.")
-        return listOf(suspendedFunction.symbol)
+        }.map { it.symbol }
     }
 
     private fun MemberGenerationContext.createSuspendifyFunctionInOriginalClass(
@@ -213,7 +219,43 @@ private class SuspendifyDeclarationGenerationExtension(
         }
     }
 
-    private inline fun <reified K : DeclarationKey> FirClassSymbol<*>.getDeclarationKey(): K? =
+    private fun FirSimpleFunction.toFunction(classId: ClassId): Function? {
+        val functionName = name.asString()
+        fun FirValueParameter.toParameter(): Parameter? {
+            val parameterType = returnTypeRef.coneTypeOrNull
+            val parameterName = this.name
+            if (parameterType == null) {
+                logger.warn(
+                    "Unable to resolve type for value parameter '$parameterName' " +
+                        "(function: '$functionName', class: '${classId.asString()}')."
+                )
+            }
+            return parameterType?.let { Parameter(name = parameterName, type = it) }
+        }
+
+        val functionReturnType = returnTypeRef.coneTypeOrNull
+        if (functionReturnType == null) {
+            logger.warn(
+                "The function '$functionName' of class `${classId.asString()}` won't be created " +
+                    "as unable to determine its return type (FIR type ref: '${returnTypeRef::class.simpleName}'). " +
+                    "Please, consider specifying the return type explicitly.)"
+            )
+        }
+
+        return functionReturnType?.let {
+            val valueParameters = this.valueParameters
+            val parameters = valueParameters.mapNotNull { it.toParameter() }
+            if (parameters.size != valueParameters.size) {
+                logger.warn(
+                    "The function '$functionName' of class `${classId.asString()}` won't be created " +
+                        "as unable to determine the return type of some of its value parameters.)"
+                )
+            }
+            Function(name = name, returnType = functionReturnType, parameters = parameters)
+        }
+    }
+
+    inline fun <reified K : DeclarationKey> FirClassSymbol<*>.getDeclarationKey(): K? =
         if (isAnnotatedWith(markAnnotationFqdn)) {
             if (isClass) {
                 DeclarationKey.OriginalClass
@@ -239,41 +281,4 @@ private class SuspendifyDeclarationGenerationExtension(
 
     private fun FirClassSymbol<*>.isAnnotatedWith(fqName: FqName): Boolean =
         annotations.any { annotation -> annotation.fqName(session) == fqName }
-
-    private fun FirSimpleFunction.toMetaFunction(classId: ClassId): Function? {
-        val functionReturnType = try {
-            this.symbol.resolvedReturnType
-        } catch (e: Exception) {
-            logger.warn("Failed to resolve function return type. Reason: ${e.message}.")
-            logger.warn(
-                "The function '$name' of class `${classId.asString()}` won't be created " +
-                    "as unable to determine its return type (FIR type ref: '${returnTypeRef::class.simpleName}'). " +
-                    "Please, consider specifying the return type explicitly.)"
-            )
-            null
-        }
-
-        return functionReturnType?.let {
-            Function(
-                name = name,
-                returnType = functionReturnType,
-                parameters = valueParameters.map { parameter ->
-                    Parameter(
-                        name = parameter.name,
-                        type = parameter.returnTypeRef.coneType,
-                    )
-                }
-            )
-        }
-    }
-
-    private fun Iterable<FirSimpleFunction>.filterIsNotSuspended(owner: FirClassSymbol<*>) =
-        filter {
-            if (it.isSuspend) {
-                logger.warn("Function '${it.name}' of class '${owner.classId.asString()}' is already suspend.")
-                false
-            } else {
-                true
-            }
-        }
 }

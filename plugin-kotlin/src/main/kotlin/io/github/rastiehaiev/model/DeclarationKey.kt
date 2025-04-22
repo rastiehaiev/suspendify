@@ -14,7 +14,7 @@ sealed class DeclarationKey : GeneratedDeclarationKey() {
 
     class SuspendifiedClass(
         val originalClass: FirClassSymbol<*>,
-        val functions: Map<Name, Function>,
+        val functions: Map<Name, List<Function>>,
     ) : DeclarationKey()
 
     class SuspendifiedClassConstructor(
