@@ -198,7 +198,6 @@ private class SuspendifyTransformer(
         val originalClassSymbol = originalClassId.toClassSymbol()
         val coroutineScopeType = Meta.ClassIds.CoroutineScope.toIrType()
         val originalFunction = originalClassSymbol.findMatchingFunction(declaration)
-            ?: warnWithError("Expected a function '${declaration.name}' in original class '${originalClassSymbol.owner.name}'.")
 
         val functionLambda = declaration.factory.buildFun {
             origin = IrDeclarationOrigin.LOCAL_FUNCTION_FOR_LAMBDA
@@ -332,14 +331,26 @@ private class SuspendifyTransformer(
             .addAnnotations(newAnnotations = listOf(extensionAnnotation))
     }
 
-    private fun IrClassSymbol.findMatchingFunction(declaration: IrFunction): IrSimpleFunction? =
-        owner.functions
-            .filter { it.name == declaration.name }
-            .firstOrNull { func ->
-                val originalParameters = func.valueParameters
-                val generatedParameters = declaration.valueParameters
-                originalParameters.map { it.name to it.type } == generatedParameters.map { it.name to it.type }
+    private fun IrClassSymbol.findMatchingFunction(declaration: IrFunction): IrSimpleFunction {
+        val applicableFunctions = owner.functions.filter { it.name == declaration.name }.toList()
+        return if (applicableFunctions.isEmpty()) {
+            warnWithError("Expected a function '${declaration.name}' in original class '${owner.name}'.")
+        } else {
+            val generatedParameters = declaration.valueParameters.map { it.name }
+            val originalParametersList = applicableFunctions.map { func ->
+                func to func.valueParameters.map { it.name }
             }
+
+            originalParametersList
+                .firstOrNull { (_, originalParameters) -> generatedParameters == originalParameters }
+                ?.let { (function) -> function }
+                ?: warnWithError(
+                    "Expected a function '${declaration.name}' in original class '${owner.name}' " +
+                        "with arguments: '$generatedParameters'. " +
+                        "Available arguments: '${originalParametersList.map { it.second }}'.",
+                )
+        }
+    }
 
     private fun warnWithError(message: String): Nothing {
         logger.warn(message)

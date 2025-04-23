@@ -5,6 +5,7 @@ import io.github.rastiehaiev.repository.UserRepository
 import io.github.rastiehaiev.repository.PositionRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import java.util.UUID
 
 fun main() {
     runBlocking {
@@ -23,13 +24,16 @@ fun main() {
         val testRepoSuspendified = testRepo.suspendify(Dispatchers.IO)
 
         testRepoSuspendified.hello()
+        testRepoSuspendified.hey()
+        testRepoSuspendified.heyUUID(UUID.randomUUID())
         testRepoSuspendified.hey("Hola!")
+        // testRepoSuspendified.hey2("Hola 2!")
         val message = testRepoSuspendified.heyAndReturn("Hola, ", "Roman!")
         println(message)
     }
 }
 
-@Suspendify
+@Suspendifyable
 class TestRepo {
     fun hello() = println("hello")
 
@@ -45,6 +49,10 @@ class TestRepo {
 
     fun hey(message: String) {
         println(message)
+    }
+
+    fun heyUUID(uuid: UUID) {
+        println("Hey $uuid")
     }
 
     fun heyAndReturn(message: String, suffix: String): String {

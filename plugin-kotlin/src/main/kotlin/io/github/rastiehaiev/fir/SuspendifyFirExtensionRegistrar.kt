@@ -57,7 +57,7 @@ private class SuspendifyDeclarationGenerationExtension(
     session: FirSession,
     private val logger: MessageCollector,
 ) : FirDeclarationGenerationExtension(session) {
-    private val markAnnotationFqdn: FqName = Meta.ClassIds.Suspendify.asSingleFqName()
+    private val markAnnotationFqdn: FqName = Meta.ClassIds.Suspendifyable.asSingleFqName()
 
     override fun FirDeclarationPredicateRegistrar.registerPredicates() {
         register(DeclarationPredicate.create { annotated(markAnnotationFqdn) })
@@ -130,13 +130,13 @@ private class SuspendifyDeclarationGenerationExtension(
     ): List<FirNamedFunctionSymbol> {
         val owner = context?.owner
         return when (val declarationKey = owner?.getDeclarationKey<DeclarationKey>()) {
-            is DeclarationKey.SuspendifiedClass -> declarationKey.createSuspendedFunction(callableId, owner)
+            is DeclarationKey.SuspendifiedClass -> declarationKey.createSuspendedFunctions(callableId, owner)
             is DeclarationKey.OriginalClass -> context.createSuspendifyFunctionInOriginalClass(callableId, owner)
             else -> emptyList()
         }
     }
 
-    private fun DeclarationKey.SuspendifiedClass.createSuspendedFunction(
+    private fun DeclarationKey.SuspendifiedClass.createSuspendedFunctions(
         callableId: CallableId,
         suspendifiedClass: FirClassSymbol<*>,
     ): List<FirNamedFunctionSymbol> {
@@ -250,8 +250,10 @@ private class SuspendifyDeclarationGenerationExtension(
                     "The function '$functionName' of class `${classId.asString()}` won't be created " +
                         "as unable to determine the return type of some of its value parameters.)"
                 )
+                null
+            } else {
+                Function(name = name, returnType = functionReturnType, parameters = parameters)
             }
-            Function(name = name, returnType = functionReturnType, parameters = parameters)
         }
     }
 

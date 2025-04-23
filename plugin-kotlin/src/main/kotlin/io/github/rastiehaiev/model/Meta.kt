@@ -46,9 +46,9 @@ object Meta {
             packageFqName = FqName("kotlin"),
             topLevelName = Name.identifier("ExtensionFunctionType")
         )
-        val Suspendify = ClassId(
+        val Suspendifyable = ClassId(
             packageFqName = FqName("io.github.rastiehaiev"),
-            topLevelName = Name.identifier("Suspendify"),
+            topLevelName = Name.identifier("Suspendifyable"),
         )
     }
 

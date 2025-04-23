@@ -1,6 +1,6 @@
 plugins {
     kotlin("jvm") version "2.1.20"
-    id("io.github.rastiehaiev.ir-dump") version "0.0.8"
+    // id("io.github.rastiehaiev.ir-dump") version "0.0.8"
     id("io.github.rastiehaiev.suspendify")
 }
 
@@ -30,9 +30,9 @@ kotlin {
     jvmToolchain(21)
 }
 
-irDump {
-    enabled = false
-}
+//irDump {
+//    enabled = false
+//}
 
 suspendify {
     enabled = true

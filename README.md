@@ -38,10 +38,10 @@ suspendify {
 ## Usage
 
 1. **Annotate your class**  
-    Add `@Suspendify` to any class whose public methods you want to expose as suspend functions:
+    Add `@Suspendifyable` to any class whose public methods you want to expose as suspend functions:
     
     ```kotlin
-    @Suspendify
+    @Suspendifyable
     class Repository {
        fun save(id: String) { /*…*/ }
        fun find(): Set<String> { /*…*/ }

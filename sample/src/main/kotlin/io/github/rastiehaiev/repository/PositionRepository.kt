@@ -1,11 +1,11 @@
 package io.github.rastiehaiev.repository
 
-import io.github.rastiehaiev.Suspendify
+import io.github.rastiehaiev.Suspendifyable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
-@Suspendify
+@Suspendifyable
 class PositionRepository {
 
     suspend fun findById(id: String) = withContext(Dispatchers.IO) {

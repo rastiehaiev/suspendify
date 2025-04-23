@@ -1,6 +1,6 @@
 package io.github.rastiehaiev.repository
 
-import io.github.rastiehaiev.Suspendify
+import io.github.rastiehaiev.Suspendifyable
 
-@Suspendify
+@Suspendifyable
 class CompanyRepository
