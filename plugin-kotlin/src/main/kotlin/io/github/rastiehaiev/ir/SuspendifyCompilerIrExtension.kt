@@ -63,14 +63,15 @@ import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.name.SpecialNames
 
-class SuspendifyCompilerIrExtension(private val configuration: CompilerConfiguration) : IrGenerationExtension {
+class SuspendifyCompilerIrExtension(configuration: CompilerConfiguration) : IrGenerationExtension {
+    private val logger = configuration.getLogger()
+
     override fun generate(moduleFragment: IrModuleFragment, pluginContext: IrPluginContext) {
-        val logger = configuration.getLogger()
-        moduleFragment.transformChildrenVoid(SuspendifyTransformer(pluginContext, logger))
+        moduleFragment.transformChildrenVoid(SuspendifyIrTransformer(pluginContext, logger))
     }
 }
 
-private class SuspendifyTransformer(
+private class SuspendifyIrTransformer(
     private val pluginContext: IrPluginContext,
     private val logger: MessageCollector,
 ) : IrElementTransformerVoid() {
@@ -169,8 +170,8 @@ private class SuspendifyTransformer(
     }
 
     private fun DeclarationIrBuilder.dispatchersIoAsExpression(): IrExpressionBody {
-        val dispatchersClassSymbol: IrClassSymbol = Meta.ClassIds.Dispatchers.toClassSymbol()
-        val ioGetter: IrSimpleFunctionSymbol = dispatchersClassSymbol.getPropertyGetterOrError("IO")
+        val dispatchersClassSymbol = Meta.ClassIds.Dispatchers.toClassSymbol()
+        val ioGetter = dispatchersClassSymbol.getPropertyGetterOrError("IO")
 
         val dispatcherIoExpression = irGet(
             type = Meta.ClassIds.CoroutineDispatcher.toIrType(),
