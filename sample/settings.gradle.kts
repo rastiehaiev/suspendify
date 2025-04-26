@@ -20,9 +20,9 @@ gradle.extra.set("pluginLibsArtifactId", pluginLibsArtifactId)
 
 pluginManagement {
     repositories {
-        mavenLocal()
         gradlePluginPortal()
         mavenCentral()
+        mavenLocal()
     }
     resolutionStrategy {
         eachPlugin {

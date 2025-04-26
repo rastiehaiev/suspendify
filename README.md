@@ -62,3 +62,8 @@ suspendify {
    ```
 
 See the [sample project](./sample/src/main/kotlin/io/github/rastiehaiev/Main.kt).
+
+Note: if [this issue](https://youtrack.jetbrains.com/issue/KTIJ-29248) has not been resolved,
+you might need to unset the Registry flag `kotlin.k2.only.bundled.compiler.plugins.enabled` 
+(In IntelliJ IDEA go to **Help** -> **Find action** -> **Registry**). Otherwise, IDE will not "see"
+generated methods.

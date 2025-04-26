@@ -5,9 +5,9 @@ plugins {
 }
 
 repositories {
-    mavenLocal()
     gradlePluginPortal()
     mavenCentral()
+    mavenLocal()
 }
 
 val pluginVersion = gradle.extra["pluginVersion"] as String
