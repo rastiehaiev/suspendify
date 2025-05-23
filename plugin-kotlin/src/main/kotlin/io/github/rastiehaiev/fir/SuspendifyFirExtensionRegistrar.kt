@@ -1,8 +1,6 @@
 package io.github.rastiehaiev.fir
 
-import io.github.rastiehaiev.error
 import io.github.rastiehaiev.getLogger
-import io.github.rastiehaiev.info
 import io.github.rastiehaiev.model.DeclarationKey
 import io.github.rastiehaiev.model.FunctionSpec
 import io.github.rastiehaiev.model.Meta
@@ -18,6 +16,7 @@ import org.jetbrains.kotlin.fir.declarations.FirRegularClass
 import org.jetbrains.kotlin.fir.declarations.FirSimpleFunction
 import org.jetbrains.kotlin.fir.declarations.FirValueParameter
 import org.jetbrains.kotlin.fir.declarations.utils.isClass
+import org.jetbrains.kotlin.fir.declarations.utils.isInterface
 import org.jetbrains.kotlin.fir.declarations.utils.isSuspend
 import org.jetbrains.kotlin.fir.extensions.FirDeclarationGenerationExtension
 import org.jetbrains.kotlin.fir.extensions.FirDeclarationPredicateRegistrar
@@ -31,6 +30,7 @@ import org.jetbrains.kotlin.fir.plugin.createNestedClass
 import org.jetbrains.kotlin.fir.resolve.defaultType
 import org.jetbrains.kotlin.fir.resolve.fqName
 import org.jetbrains.kotlin.fir.resolve.providers.symbolProvider
+import org.jetbrains.kotlin.fir.resolve.toSymbol
 import org.jetbrains.kotlin.fir.scopes.processClassifiersByName
 import org.jetbrains.kotlin.fir.symbols.SymbolInternals
 import org.jetbrains.kotlin.fir.symbols.impl.FirClassLikeSymbol
@@ -66,28 +66,28 @@ private class SuspendifyDeclarationGenerationExtension(
     override fun getNestedClassifiersNames(
         classSymbol: FirClassSymbol<*>,
         context: NestedClassGenerationContext,
-    ): Set<Name> =
-        when (classSymbol.getDeclarationKey<DeclarationKey>()) {
-            is DeclarationKey.OriginalClass -> setOf(Meta.SuspendifiedClass.name)
-            else -> emptySet()
-        }
+    ): Set<Name> = setOf(Meta.SuspendifiedClass.name)
 
     override fun generateNestedClassLikeDeclaration(
         owner: FirClassSymbol<*>,
         name: Name,
         context: NestedClassGenerationContext,
     ): FirClassLikeSymbol<*>? {
-        val declarationKey = owner.getDeclarationKey<DeclarationKey.OriginalClass>()
-        return if (declarationKey != null && name == Meta.SuspendifiedClass.name) {
-            createNestedClassStub(owner, name)?.symbol
+        return if (name != Meta.SuspendifiedClass.name) {
+            null
         } else {
-            super.generateNestedClassLikeDeclaration(owner, name, context)
+            val declarationKey = owner.getDeclarationKey<DeclarationKey.OriginalClass>()
+            if (declarationKey != null) {
+                createNestedClassStub(owner, name)?.symbol
+            } else {
+                null
+            }
         }
     }
 
     private fun createNestedClassStub(owner: FirClassSymbol<*>, name: Name): FirRegularClass? {
         val key = DeclarationKey.SuspendifiedClass(owner)
-        logger.info("Creating nested class '$name' for '${owner.classId.asString()}'.")
+        logger.warn("Creating nested class '$name' for '${owner.classId.asString()}'.")
         return createNestedClass(owner, name, key) {
             visibility = Visibilities.Public
             modality = Modality.FINAL
@@ -253,19 +253,32 @@ private class SuspendifyDeclarationGenerationExtension(
         return fir.declarations.filterIsInstance<FirSimpleFunction>()
     }
 
-    private inline fun <reified K : DeclarationKey> FirClassSymbol<*>.getDeclarationKey(): K? =
-        if (isAnnotatedWith(markAnnotationFqdn)) {
-            if (isClass) {
-                DeclarationKey.OriginalClass
-            } else {
-                logger.error("Only classes can be annotated with '${markAnnotationFqdn}'!")
-                null
-            }
+    private inline fun <reified K : DeclarationKey> FirClassSymbol<*>.getDeclarationKey(): K? {
+        val declarationKey = if (isClass && isAnnotatedWith(markAnnotationFqdn)) {
+            DeclarationKey.OriginalClass
+        } else if (isClass && hasSuperTypeAnnotatedWith(markAnnotationFqdn)) {
+            DeclarationKey.OriginalClass
         } else {
             (origin as? FirDeclarationOrigin.Plugin)?.key
-        }.let {
-            it as? K
         }
+        return declarationKey as? K
+    }
+
+    @OptIn(SymbolInternals::class)
+    private fun FirClassSymbol<*>.hasSuperTypeAnnotatedWith(annotationFqName: FqName): Boolean {
+        val targetSuperTypes = fir.superTypeRefs
+            .mapNotNull { it.coneTypeOrNull }
+            .mapNotNull { it.toSymbol(session) as? FirClassSymbol<*> }
+            .filter { it.isInterface && it.isAnnotatedWith(annotationFqName) }
+
+        if (targetSuperTypes.size > 1) {
+            logger.warn(
+                "The type '${this.name}' has multiple supertypes annotated with `${classId.asString()}`! " +
+                    "Suspendified class won't be created."
+            )
+        }
+        return targetSuperTypes.size == 1
+    }
 
     private fun MemberGenerationContext.findClassSymbols(name: Name): List<FirClassSymbol<*>> =
         mutableSetOf<FirClassifierSymbol<*>>()

@@ -2,10 +2,11 @@ package io.github.rastiehaiev
 
 import io.github.rastiehaiev.repository.CompanyRepository
 import io.github.rastiehaiev.repository.PositionRepository
+import io.github.rastiehaiev.repository.SettingsEntity
+import io.github.rastiehaiev.repository.SettingsRepository
 import io.github.rastiehaiev.repository.UserRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
-import kotlin.io.println
 
 fun main() {
     runBlocking {
@@ -20,17 +21,14 @@ fun main() {
         val positionRepositorySuspendified = positionRepository.suspendify(Dispatchers.IO)
         println(positionRepositorySuspendified)
 
-        val testRepo = TestRepo()
-        val testRepoSuspendified = testRepo.suspendify(with = Dispatchers.IO)
-        println(testRepoSuspendified)
-        println(testRepoSuspendified.greeting())
+        val settingsRepository = SettingsRepositoryImpl()
+        val settingsRepositorySuspendified = settingsRepository.suspendify(with = Dispatchers.IO)
+        println(settingsRepositorySuspendified)
+        println(settingsRepositorySuspendified.getSetting(id = "123"))
     }
 }
 
-@Suspendifyable
-@IrDump
-class TestRepo {
-    fun greeting(): String {
-        return "Hello"
-    }
+class SettingsRepositoryImpl: SettingsRepository {
+
+    override fun getSetting(id: String): SettingsEntity = SettingsEntity(id)
 }
